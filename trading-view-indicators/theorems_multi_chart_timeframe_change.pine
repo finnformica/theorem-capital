@@ -1,0 +1,152 @@
+//@version=6
+indicator("Theorems Multi-Chart Timeframe Sync", overlay=true)
+
+// === INPUTS ===
+poll_seconds = input.int(5, "Poll Seconds", tooltip="How often to check for timeframe changes", minval=1, maxval=60)
+sync_only_same_symbol = input.bool(false, "Sync Only Same Symbol", tooltip="Only sync charts of same symbol")
+
+// Display settings
+show_status = input.bool(true, "Show Status Panel")
+panel_position = input.string("Top Right", "Panel Position", options=["Top Left", "Top Right", "Bottom Left", "Bottom Right"])
+text_color = input.color(color.white, "Text Color")
+bg_color = input.color(color.new(color.black, 70), "Background Color")
+
+// === HELPER FUNCTIONS ===
+// Convert timeframe to string
+timeframe_to_string(tf) =>
+    switch tf
+        "1" => "M1"
+        "3" => "M3"
+        "5" => "M5"
+        "15" => "M15"
+        "30" => "M30"
+        "60" => "H1"
+        "120" => "H2"
+        "240" => "H4"
+        "360" => "H6"
+        "480" => "H8"
+        "720" => "H12"
+        "D" => "D1"
+        "W" => "W1"
+        "M" => "MN1"
+        => tf
+
+// Get position constant
+get_position() =>
+    switch panel_position
+        "Top Left" => position.top_left
+        "Top Right" => position.top_right
+        "Bottom Left" => position.bottom_left
+        "Bottom Right" => position.bottom_right
+        => position.top_right
+
+// === MAIN LOGIC ===
+var table status_panel = na
+var string last_timeframe = na
+var int last_update_time = na
+
+// Initialize or update the status panel
+if show_status and barstate.islast
+    current_tf = timeframe.period
+    current_symbol = syminfo.tickerid
+    current_time = time
+
+    // Check if timeframe changed
+    tf_changed = na(last_timeframe) or current_tf != last_timeframe
+
+    if na(status_panel)
+        status_panel := table.new(
+            position=get_position(),
+            columns=2,
+            rows=6,
+            bgcolor=bg_color,
+            border_width=1
+        )
+
+        // Header
+        table.cell(status_panel, 0, 0, "Multi-Chart Sync", text_color=text_color, text_size=size.normal, bgcolor=color.new(color.blue, 80))
+        table.cell(status_panel, 1, 0, "Status", text_color=text_color, text_size=size.normal, bgcolor=color.new(color.blue, 80))
+
+    // Update panel content
+    table.cell(status_panel, 0, 1, "Symbol:", text_color=text_color, text_size=size.small)
+    table.cell(status_panel, 1, 1, current_symbol, text_color=text_color, text_size=size.small)
+
+    table.cell(status_panel, 0, 2, "Timeframe:", text_color=text_color, text_size=size.small)
+    table.cell(status_panel, 1, 2, timeframe_to_string(current_tf), text_color=text_color, text_size=size.small)
+
+    table.cell(status_panel, 0, 3, "Sync Mode:", text_color=text_color, text_size=size.small)
+    sync_mode_text = sync_only_same_symbol ? "Same Symbol" : "All Charts"
+    table.cell(status_panel, 1, 3, sync_mode_text, text_color=text_color, text_size=size.small)
+
+    table.cell(status_panel, 0, 4, "Poll Rate:", text_color=text_color, text_size=size.small)
+    table.cell(status_panel, 1, 4, str.tostring(poll_seconds) + "s", text_color=text_color, text_size=size.small)
+
+    // Status indicator
+    table.cell(status_panel, 0, 5, "Status:", text_color=text_color, text_size=size.small)
+    status_text = tf_changed ? "TF Changed!" : "Monitoring..."
+    status_color = tf_changed ? color.yellow : color.green
+    table.cell(status_panel, 1, 5, status_text, text_color=status_color, text_size=size.small)
+
+    // Alert if timeframe changed
+    if tf_changed and not na(last_timeframe) and alerts_enabled()
+        alert("Timeframe changed on " + current_symbol + " from " +
+              timeframe_to_string(last_timeframe) + " to " + timeframe_to_string(current_tf),
+              alert.freq_once_per_bar)
+
+    // Update tracking variables
+    last_timeframe := current_tf
+    last_update_time := time
+
+// Function to check if alerts are enabled (simplified)
+alerts_enabled() =>
+    true  // Always enabled in this implementation
+
+// Display instructions
+if barstate.islast and not show_status
+    // Create a simple label with instructions
+    label.new(
+        x=bar_index,
+        y=high,
+        text="Multi-Chart TF Sync\nEnable Status Panel to see details",
+        color=bg_color,
+        textcolor=text_color,
+        style=label.style_label_down,
+        size=size.normal
+    )
+
+// Note about TradingView limitations
+var label limitation_note = na
+if barstate.islast and na(limitation_note)
+    limitation_note := label.new(
+        x=bar_index - 10,
+        y=low,
+        text="Note: TradingView doesn't support\ncross-chart synchronization.\nThis indicator shows current chart\ntimeframe information only.",
+        color=color.new(color.orange, 80),
+        textcolor=color.black,
+        style=label.style_label_up,
+        size=size.small
+    )
+
+// Plot invisible line to ensure indicator runs
+plot(na, title="Sync Monitor")
+
+// === NOTES ===
+// This Pine Script version is adapted for TradingView's single-chart environment
+// Key differences from MT4 version:
+// 1. Cannot directly sync multiple charts (TradingView limitation)
+// 2. Provides status monitoring for current chart
+// 3. Can alert on timeframe changes
+// 4. Shows sync configuration and status
+//
+// To achieve multi-chart sync in TradingView:
+// 1. Add this indicator to each chart you want to monitor
+// 2. Use TradingView's built-in chart linking features
+// 3. Manually coordinate timeframe changes across charts
+//
+// Original MT4 functionality included:
+// - Cross-chart timeframe synchronization
+// - Global variable communication between charts
+// - Automatic chart updates via ChartSetSymbolPeriod()
+// - Chart detection and tracking
+//
+// These features are not available in Pine Script due to platform limitations

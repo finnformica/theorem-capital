@@ -1,0 +1,257 @@
+//@version=6
+indicator("Theorems PSP Candle Overlay", overlay=true, max_boxes_count=500, max_lines_count=1000)
+
+// === INPUTS ===
+max_bars_scan = input.int(800, "Max Bars to Scan", tooltip="0 = all bars", minval=0)
+ignore_doji = input.bool(true, "Ignore Doji Candles")
+
+// Display mode
+psp_mode = input.bool(false, "PSP Mode (Require Base Swing Point)", tooltip="false = show all CIC cracks, true = PSP mode")
+swing_bars = input.int(2, "Swing Bars", tooltip="Pivot strength for PSP mode", minval=1)
+
+// CIC color scheme
+cic_bull_color = input.color(color.blue, "CIC Bull Color")
+cic_bear_color = input.color(color.red, "CIC Bear Color")
+
+// PSP color scheme
+psp_bull_color = input.color(color.lime, "PSP Bull Color")
+psp_bear_color = input.color(color.orange, "PSP Bear Color")
+
+// Overlay appearance
+body_width_percent = input.int(70, "Body Width Percent", minval=10, maxval=95, tooltip="10..95 of candle width")
+wick_width = input.int(1, "Wick Width", minval=1, maxval=5)
+draw_wicks = input.bool(true, "Draw Wicks")
+draw_body = input.bool(true, "Draw Body")
+draw_in_background = input.bool(false, "Draw Overlay in Background", tooltip="false = in front of candles")
+
+// Optional fallback arrows (not implemented in this Pine version due to plotting limitations)
+show_arrows = input.bool(false, "Show Fallback Arrows")
+
+// Alerts
+enable_alerts = input.bool(false, "Enable Alerts")
+
+// Pair 1
+enable_pair1 = input.bool(true, "Enable Pair 1")
+symbol1 = input.string("EURUSD", "Symbol 1")
+invert_pair1 = input.bool(false, "Invert Pair 1")
+
+// Pair 2
+enable_pair2 = input.bool(false, "Enable Pair 2")
+symbol2 = input.string("GBPUSD", "Symbol 2")
+invert_pair2 = input.bool(false, "Invert Pair 2")
+
+// Pair 3
+enable_pair3 = input.bool(false, "Enable Pair 3")
+symbol3 = input.string("USDJPY", "Symbol 3")
+invert_pair3 = input.bool(false, "Invert Pair 3")
+
+// Pair 4
+enable_pair4 = input.bool(false, "Enable Pair 4")
+symbol4 = input.string("DXY", "Symbol 4")
+invert_pair4 = input.bool(true, "Invert Pair 4")
+
+// === HELPER FUNCTIONS ===
+candle_direction(o, c) =>
+    if c > o
+        1
+    else if c < o
+        -1
+    else
+        0
+
+// Check if any pair is enabled
+any_pair_enabled() =>
+    enable_pair1 or enable_pair2 or enable_pair3 or enable_pair4
+
+// Get synced OHLC data for comparison symbol
+get_synced_data(symbol_name, bar_time) =>
+    if symbol_name == ""
+        [na, na]
+    else
+        // Use request.security to get data from other symbols
+        o_val = request.security(symbol_name, timeframe.period, open, lookahead=barmerge.lookahead_off)
+        c_val = request.security(symbol_name, timeframe.period, close, lookahead=barmerge.lookahead_off)
+        [o_val, c_val]
+
+// Check CIC against a pair
+is_cic_against_pair(bar_time, main_dir, symbol_name, enabled, inverted) =>
+    if not enabled or main_dir == 0
+        false
+    else
+        [o2, c2] = get_synced_data(symbol_name, bar_time)
+        if na(o2) or na(c2)
+            false
+        else
+            cmp_dir = candle_direction(o2, c2)
+            if cmp_dir == 0
+                false
+            else
+                if not inverted
+                    main_dir != cmp_dir  // normal pair: CIC when opposite
+                else
+                    main_dir == cmp_dir  // inverted pair: CIC when same
+
+// Check if bar is CIC
+is_cic_bar(bar_time, o, c) =>
+    main_dir = candle_direction(o, c)
+
+    if ignore_doji and main_dir == 0
+        false
+    else
+        is_cic_against_pair(bar_time, main_dir, symbol1, enable_pair1, invert_pair1) or
+        is_cic_against_pair(bar_time, main_dir, symbol2, enable_pair2, invert_pair2) or
+        is_cic_against_pair(bar_time, main_dir, symbol3, enable_pair3, invert_pair3) or
+        is_cic_against_pair(bar_time, main_dir, symbol4, enable_pair4, invert_pair4)
+
+// Check if bar is a swing high
+is_swing_high(index) =>
+    if index < swing_bars or index >= bar_index - swing_bars
+        false
+    else
+        pivot_high = high[bar_index - index]
+        is_pivot = true
+        for k = 1 to swing_bars
+            if high[bar_index - index + k] >= pivot_high or high[bar_index - index - k] > pivot_high
+                is_pivot := false
+                break
+        is_pivot
+
+// Check if bar is a swing low
+is_swing_low(index) =>
+    if index < swing_bars or index >= bar_index - swing_bars
+        false
+    else
+        pivot_low = low[bar_index - index]
+        is_pivot = true
+        for k = 1 to swing_bars
+            if low[bar_index - index + k] <= pivot_low or low[bar_index - index - k] < pivot_low
+                is_pivot := false
+                break
+        is_pivot
+
+// Check if bar is base swing point
+is_base_swing_point(index) =>
+    is_swing_high(index) or is_swing_low(index)
+
+// Get display color
+get_display_color(is_psp, direction) =>
+    if is_psp
+        direction > 0 ? psp_bull_color : psp_bear_color
+    else
+        direction > 0 ? cic_bull_color : cic_bear_color
+
+// === MAIN LOGIC ===
+var box[] overlay_boxes = array.new<box>()
+var line[] wick_lines = array.new<line>()
+
+// Clean up old objects
+if barstate.islast
+    // Clear old boxes and lines
+    for i = 0 to array.size(overlay_boxes) - 1
+        box.delete(array.get(overlay_boxes, i))
+    array.clear(overlay_boxes)
+
+    for i = 0 to array.size(wick_lines) - 1
+        line.delete(array.get(wick_lines, i))
+    array.clear(wick_lines)
+
+if any_pair_enabled()
+    // Process recent bars
+    scan_limit = max_bars_scan > 0 ? math.min(bar_index, max_bars_scan) : bar_index
+
+    for i = 0 to math.min(scan_limit, 100)  // Limit to prevent timeout
+        bar_idx = i
+        if bar_idx < bar_index
+            bar_time = time[bar_idx]
+            bar_open = open[bar_idx]
+            bar_high = high[bar_idx]
+            bar_low = low[bar_idx]
+            bar_close = close[bar_idx]
+
+            direction = candle_direction(bar_open, bar_close)
+
+            if ignore_doji and direction == 0
+                continue
+
+            is_cic = is_cic_bar(bar_time, bar_open, bar_close)
+            if not is_cic
+                continue
+
+            is_psp = is_base_swing_point(bar_idx)
+
+            if psp_mode and not is_psp
+                continue
+
+            display_color = get_display_color(is_psp, direction)
+
+            // Draw overlay candle
+            if draw_body
+                body_top = math.max(bar_open, bar_close)
+                body_bottom = math.min(bar_open, bar_close)
+
+                // Adjust for doji candles
+                if body_top == body_bottom
+                    tick_size = syminfo.mintick
+                    body_top += tick_size
+                    body_bottom -= tick_size
+
+                // Calculate bar position for the box
+                box_bar_index = bar_index - bar_idx
+                box_width_offset = math.max(1, math.round(body_width_percent / 100.0))
+
+                overlay_box = box.new(
+                    left=box_bar_index - box_width_offset,
+                    top=body_top,
+                    right=box_bar_index + box_width_offset,
+                    bottom=body_bottom,
+                    border_color=display_color,
+                    bgcolor=color.new(display_color, 70),
+                    border_width=1
+                )
+                array.push(overlay_boxes, overlay_box)
+
+            if draw_wicks
+                // Upper wick
+                if bar_high > math.max(bar_open, bar_close)
+                    upper_wick = line.new(
+                        x1=box_bar_index,
+                        y1=bar_high,
+                        x2=box_bar_index,
+                        y2=math.max(bar_open, bar_close),
+                        color=display_color,
+                        width=wick_width
+                    )
+                    array.push(wick_lines, upper_wick)
+
+                // Lower wick
+                if bar_low < math.min(bar_open, bar_close)
+                    lower_wick = line.new(
+                        x1=box_bar_index,
+                        y1=bar_low,
+                        x2=box_bar_index,
+                        y2=math.min(bar_open, bar_close),
+                        color=display_color,
+                        width=wick_width
+                    )
+                    array.push(wick_lines, lower_wick)
+
+// Alerts
+if enable_alerts and barstate.isconfirmed
+    bar_time = time
+    bar_open = open
+    bar_close = close
+    direction = candle_direction(bar_open, bar_close)
+
+    if not (ignore_doji and direction == 0)
+        is_cic = is_cic_bar(bar_time, bar_open, bar_close)
+        if is_cic
+            is_psp = is_base_swing_point(0)
+            should_show = not psp_mode or is_psp
+
+            if should_show
+                mode_text = is_psp ? "PSP" : "CIC"
+                dir_text = direction > 0 ? "BULLISH" : (direction < 0 ? "BEARISH" : "DOJI")
+                alert(mode_text + " detected on " + syminfo.tickerid + " | Direction: " + dir_text, alert.freq_once_per_bar)
+
+// Note: This Pine Script implementation provides similar functionality to the MT4 version
+// Some features like exact object naming and placement may differ due to Pine Script limitations

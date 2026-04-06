@@ -1,0 +1,253 @@
+//@version=6
+indicator("Theorems Sessions Bottom Pane", "Sessions", overlay=false, max_boxes_count=500, max_labels_count=200)
+
+// === INPUTS ===
+// Time settings
+days_back = input.int(20, "Days Back", minval=1, maxval=100)
+days_forward = input.int(0, "Days Forward", minval=0, maxval=30)
+
+// Timeframe checkboxes
+show_m1 = input.bool(true, "Show M1")
+show_m5 = input.bool(true, "Show M5")
+show_m15 = input.bool(true, "Show M15")
+show_m30 = input.bool(true, "Show M30")
+show_h1 = input.bool(true, "Show H1")
+show_h4 = input.bool(true, "Show H4")
+show_d1 = input.bool(true, "Show D1")
+show_w1 = input.bool(true, "Show W1")
+show_mn1 = input.bool(true, "Show MN1")
+
+// 90M cycle layer settings
+l0_enable = input.bool(true, "90M Cycle Enable", group="90M Cycle")
+l0_s1_enable = input.bool(true, "90M Q1 Enable", group="90M Cycle")
+l0_s1_name = input.string("90M Q1", "90M Q1 Name", group="90M Cycle")
+l0_s1_start = input.string("04:00", "90M Q1 Start", group="90M Cycle")
+l0_s1_end = input.string("05:30", "90M Q1 End", group="90M Cycle")
+l0_s1_color = input.color(color.silver, "90M Q1 Color", group="90M Cycle")
+
+l0_s2_enable = input.bool(true, "90M Q2 Enable", group="90M Cycle")
+l0_s2_name = input.string("90M Q2", "90M Q2 Name", group="90M Cycle")
+l0_s2_start = input.string("05:30", "90M Q2 Start", group="90M Cycle")
+l0_s2_end = input.string("07:00", "90M Q2 End", group="90M Cycle")
+l0_s2_color = input.color(color.gray, "90M Q2 Color", group="90M Cycle")
+
+l0_s3_enable = input.bool(true, "90M Q3 Enable", group="90M Cycle")
+l0_s3_name = input.string("90M Q3", "90M Q3 Name", group="90M Cycle")
+l0_s3_start = input.string("07:00", "90M Q3 Start", group="90M Cycle")
+l0_s3_end = input.string("08:30", "90M Q3 End", group="90M Cycle")
+l0_s3_color = input.color(color.silver, "90M Q3 Color", group="90M Cycle")
+
+l0_s4_enable = input.bool(true, "90M Q4 Enable", group="90M Cycle")
+l0_s4_name = input.string("90M Q4", "90M Q4 Name", group="90M Cycle")
+l0_s4_start = input.string("08:30", "90M Q4 Start", group="90M Cycle")
+l0_s4_end = input.string("10:00", "90M Q4 End", group="90M Cycle")
+l0_s4_color = input.color(color.gray, "90M Q4 Color", group="90M Cycle")
+
+// Day cycle layer settings
+l1_s1_enable = input.bool(true, "London Enable", group="Day Sessions")
+l1_s1_name = input.string("London", "London Name", group="Day Sessions")
+l1_s1_start = input.string("08:00", "London Start", group="Day Sessions")
+l1_s1_end = input.string("12:00", "London End", group="Day Sessions")
+l1_s1_color = input.color(color.blue, "London Color", group="Day Sessions")
+
+l1_s2_enable = input.bool(true, "New York Enable", group="Day Sessions")
+l1_s2_name = input.string("New York", "New York Name", group="Day Sessions")
+l1_s2_start = input.string("14:00", "New York Start", group="Day Sessions")
+l1_s2_end = input.string("20:00", "New York End", group="Day Sessions")
+l1_s2_color = input.color(color.green, "New York Color", group="Day Sessions")
+
+l1_s3_enable = input.bool(true, "Asia Enable", group="Day Sessions")
+l1_s3_name = input.string("Asia", "Asia Name", group="Day Sessions")
+l1_s3_start = input.string("20:00", "Asia Start", group="Day Sessions")
+l1_s3_end = input.string("02:00", "Asia End", group="Day Sessions")
+l1_s3_color = input.color(color.orange, "Asia Color", group="Day Sessions")
+
+// Visual settings
+show_session_labels = input.bool(true, "Show Session Labels", group="Visual")
+session_label_color = input.color(color.white, "Session Label Color", group="Visual")
+box_transparency = input.int(80, "Box Transparency", minval=0, maxval=100, group="Visual")
+label_size = input.string("Small", "Label Size", options=["Tiny", "Small", "Normal"], group="Visual")
+
+// === FUNCTIONS ===
+// Check if current timeframe is allowed
+timeframe_allowed() =>
+    tf = timeframe.period
+    switch tf
+        "1" => show_m1
+        "5" => show_m5
+        "15" => show_m15
+        "30" => show_m30
+        "60" => show_h1
+        "240" => show_h4
+        "D" => show_d1
+        "W" => show_w1
+        "M" => show_mn1
+        => true
+
+// Parse HH:MM string to hours and minutes
+parse_time(time_str) =>
+    parts = str.split(time_str, ":")
+    if array.size(parts) == 2
+        hours = str.tonumber(array.get(parts, 0))
+        minutes = str.tonumber(array.get(parts, 1))
+        [hours, minutes]
+    else
+        [na, na]
+
+// Get label size
+get_label_size() =>
+    switch label_size
+        "Tiny" => size.tiny
+        "Small" => size.small
+        "Normal" => size.normal
+        => size.small
+
+// Convert time to bar index offset
+time_to_bar_offset(target_time) =>
+    ms_per_bar = timeframe.in_seconds(timeframe.period) * 1000
+    offset = (target_time - time) / ms_per_bar
+    math.round(offset)
+
+// Draw session box in separate pane
+draw_session_box(start_time, end_time, session_color, session_name, layer) =>
+    start_bar_offset = time_to_bar_offset(start_time)
+    end_bar_offset = time_to_bar_offset(end_time)
+
+    start_bar_index = bar_index + int(start_bar_offset)
+    end_bar_index = bar_index + int(end_bar_offset)
+
+    // Use fixed Y coordinates for separate pane (0-100 scale)
+    layer_height = 10
+    y_bottom = layer * layer_height
+    y_top = y_bottom + layer_height - 1
+
+    // Create box
+    session_box = box.new(
+        left=start_bar_index,
+        top=y_top,
+        right=end_bar_index,
+        bottom=y_bottom,
+        border_color=session_color,
+        bgcolor=color.new(session_color, box_transparency),
+        border_width=1
+    )
+
+    // Create label if enabled
+    if show_session_labels
+        mid_bar = (start_bar_index + end_bar_index) / 2
+        mid_y = (y_top + y_bottom) / 2
+        label.new(
+            x=int(mid_bar),
+            y=mid_y,
+            text=session_name,
+            color=color.new(color.white, 100),
+            textcolor=session_label_color,
+            size=get_label_size(),
+            style=label.style_label_center
+        )
+
+    session_box
+
+// === MAIN LOGIC ===
+var box[] session_boxes = array.new<box>()
+var label[] session_labels = array.new<label>()
+
+// Clean up old objects
+if barstate.islast
+    while array.size(session_boxes) > 0
+        box.delete(array.pop(session_boxes))
+
+    for lbl in label.all
+        label.delete(lbl)
+
+// Create invisible plot to establish pane scale
+hline(100, color=color.new(color.white, 100))
+hline(0, color=color.new(color.white, 100))
+
+// Draw sessions on last bar
+if timeframe_allowed() and barstate.islast
+    current_day = timestamp(year(time), month(time), dayofmonth(time), 0, 0, 0)
+
+    // Draw sessions for each day
+    for day_offset = -days_forward to days_back
+        day_start = current_day - day_offset * 86400000
+
+        // 90M Cycle Q1
+        if l0_enable and l0_s1_enable
+            [h, m] = parse_time(l0_s1_start)
+            [end_h, end_m] = parse_time(l0_s1_end)
+            if not na(h) and not na(m) and not na(end_h) and not na(end_m)
+                start_time = day_start + h * 3600000 + m * 60000
+                end_time = day_start + end_h * 3600000 + end_m * 60000
+                if end_time <= start_time
+                    end_time := end_time + 86400000
+                box_obj = draw_session_box(start_time, end_time, l0_s1_color, l0_s1_name, 0)
+                array.push(session_boxes, box_obj)
+
+        // 90M Cycle Q2
+        if l0_enable and l0_s2_enable
+            [h, m] = parse_time(l0_s2_start)
+            [end_h, end_m] = parse_time(l0_s2_end)
+            if not na(h) and not na(m) and not na(end_h) and not na(end_m)
+                start_time = day_start + h * 3600000 + m * 60000
+                end_time = day_start + end_h * 3600000 + end_m * 60000
+                if end_time <= start_time
+                    end_time := end_time + 86400000
+                box_obj = draw_session_box(start_time, end_time, l0_s2_color, l0_s2_name, 0)
+                array.push(session_boxes, box_obj)
+
+        // 90M Cycle Q3
+        if l0_enable and l0_s3_enable
+            [h, m] = parse_time(l0_s3_start)
+            [end_h, end_m] = parse_time(l0_s3_end)
+            if not na(h) and not na(m) and not na(end_h) and not na(end_m)
+                start_time = day_start + h * 3600000 + m * 60000
+                end_time = day_start + end_h * 3600000 + end_m * 60000
+                if end_time <= start_time
+                    end_time := end_time + 86400000
+                box_obj = draw_session_box(start_time, end_time, l0_s3_color, l0_s3_name, 0)
+                array.push(session_boxes, box_obj)
+
+        // 90M Cycle Q4
+        if l0_enable and l0_s4_enable
+            [h, m] = parse_time(l0_s4_start)
+            [end_h, end_m] = parse_time(l0_s4_end)
+            if not na(h) and not na(m) and not na(end_h) and not na(end_m)
+                start_time = day_start + h * 3600000 + m * 60000
+                end_time = day_start + end_h * 3600000 + end_m * 60000
+                if end_time <= start_time
+                    end_time := end_time + 86400000
+                box_obj = draw_session_box(start_time, end_time, l0_s4_color, l0_s4_name, 0)
+                array.push(session_boxes, box_obj)
+
+        // London Session
+        if l1_s1_enable
+            [h, m] = parse_time(l1_s1_start)
+            [end_h, end_m] = parse_time(l1_s1_end)
+            if not na(h) and not na(m) and not na(end_h) and not na(end_m)
+                start_time = day_start + h * 3600000 + m * 60000
+                end_time = day_start + end_h * 3600000 + end_m * 60000
+                box_obj = draw_session_box(start_time, end_time, l1_s1_color, l1_s1_name, 1)
+                array.push(session_boxes, box_obj)
+
+        // New York Session
+        if l1_s2_enable
+            [h, m] = parse_time(l1_s2_start)
+            [end_h, end_m] = parse_time(l1_s2_end)
+            if not na(h) and not na(m) and not na(end_h) and not na(end_m)
+                start_time = day_start + h * 3600000 + m * 60000
+                end_time = day_start + end_h * 3600000 + end_m * 60000
+                box_obj = draw_session_box(start_time, end_time, l1_s2_color, l1_s2_name, 1)
+                array.push(session_boxes, box_obj)
+
+        // Asia Session
+        if l1_s3_enable
+            [h, m] = parse_time(l1_s3_start)
+            [end_h, end_m] = parse_time(l1_s3_end)
+            if not na(h) and not na(m) and not na(end_h) and not na(end_m)
+                start_time = day_start + h * 3600000 + m * 60000
+                end_time = day_start + end_h * 3600000 + end_m * 60000
+                if end_time <= start_time
+                    end_time := end_time + 86400000
+                box_obj = draw_session_box(start_time, end_time, l1_s3_color, l1_s3_name, 1)
+                array.push(session_boxes, box_obj)

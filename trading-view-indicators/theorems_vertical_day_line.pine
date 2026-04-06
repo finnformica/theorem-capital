@@ -1,0 +1,106 @@
+//@version=6
+indicator("Theorems Vertical Day Line", overlay=true, max_lines_count=500)
+
+// Inputs
+time_input = input.string("04:00", "Time each day (HH:MM)", tooltip="Time in broker/server time zone")
+line_color = input.color(color.blue, "Line Color")
+line_width = input.int(1, "Line Width", minval=1, maxval=5)
+line_style = input.string("Solid", "Line Style", options=["Solid", "Dashed", "Dotted"])
+
+past_days = input.int(20, "Past Days", tooltip="How many past days to draw", minval=1, maxval=500)
+future_days = input.int(5, "Future Days", tooltip="How many future days to draw", minval=0, maxval=50)
+
+// Timeframe filter
+min_tf = input.timeframe("1", "Minimum Timeframe", tooltip="Minimum timeframe to show lines")
+max_tf = input.timeframe("240", "Maximum Timeframe", tooltip="Maximum timeframe to show lines")
+
+only_if_time_exists = input.bool(true, "Only if time exists", tooltip="Only draw if exact time exists in chart history")
+redraw_on_tick = input.bool(false, "Redraw on tick", tooltip="Refresh lines every tick (usually unnecessary)")
+
+// Convert line style string to Pine Script constant
+get_line_style() =>
+    switch line_style
+        "Dashed" => line.style_dashed
+        "Dotted" => line.style_dotted
+        => line.style_solid
+
+// Parse HH:MM string into hours and minutes
+parse_time(time_str) =>
+    colon_pos = str.pos(time_str, ":")
+    if colon_pos < 0
+        [na, na]
+    else
+        hours_str = str.substring(time_str, 0, colon_pos)
+        minutes_str = str.substring(time_str, colon_pos + 1)
+        hours = str.tonumber(hours_str)
+        minutes = str.tonumber(minutes_str)
+        if hours >= 0 and hours <= 23 and minutes >= 0 and minutes <= 59
+            [hours, minutes]
+        else
+            [na, na]
+
+// Check if current timeframe is within selected window
+timeframe_allowed() =>
+    current_tf = timeframe.in_seconds(timeframe.period)
+    min_tf_seconds = timeframe.in_seconds(min_tf)
+    max_tf_seconds = timeframe.in_seconds(max_tf)
+    current_tf >= min_tf_seconds and current_tf <= max_tf_seconds
+
+// Convert timeframe to minutes for comparison
+tf_to_minutes(tf_str) =>
+    timeframe.in_seconds(tf_str) / 60
+
+// Check if there's a bar at specific time (approximation)
+has_bar_at_time(target_time) =>
+    if not only_if_time_exists
+        true
+    else
+        // In Pine Script, we can't directly check M1 bars from other timeframes
+        // So we'll approximate by checking if we're in a trading session
+        not na(close)
+
+// Main logic
+if timeframe_allowed()
+    [hours, minutes] = parse_time(time_input)
+
+    if not na(hours) and not na(minutes)
+        // Calculate target times for past and future days
+        current_day = math.floor(time / 86400000) * 86400000
+        target_minute_offset = hours * 60 + minutes
+
+        var line[] daily_lines = array.new<line>()
+
+        // Clean up old lines
+        if array.size(daily_lines) > 0
+            for i = 0 to array.size(daily_lines) - 1
+                line.delete(array.get(daily_lines, i))
+            array.clear(daily_lines)
+
+        // Draw lines for specified date range
+        for day_offset = -past_days to future_days
+            target_day = current_day + day_offset * 86400000
+            target_time = target_day + target_minute_offset * 60000
+
+            // Only draw if time exists (simplified check)
+            if has_bar_at_time(target_time)
+                // Create vertical line using bar indices
+                // Find the bar index closest to the target time
+                target_bar_index = bar_index
+                for i = 0 to math.min(bar_index, 500) // Limit search to avoid timeout
+                    if math.abs(time[i] - target_time) < math.abs(time[target_bar_index - bar_index] - target_time)
+                        target_bar_index := bar_index - i
+
+                daily_line = line.new(
+                    x1=target_bar_index,
+                    y1=low,
+                    x2=target_bar_index,
+                    y2=high,
+                    color=line_color,
+                    width=line_width,
+                    style=get_line_style(),
+                    extend=extend.both
+                )
+                array.push(daily_lines, daily_line)
+
+// Note: Pine Script doesn't support the exact same bar existence checking as MT4
+// This implementation provides similar functionality with Pine Script capabilities

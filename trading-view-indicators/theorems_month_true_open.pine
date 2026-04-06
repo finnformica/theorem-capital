@@ -1,0 +1,215 @@
+//@version=6
+indicator("Theorems Month True Open", overlay=true, max_lines_count=100)
+
+// === INPUTS ===
+// Month cycle settings
+month_enable = input.bool(true, "Enable Month Lines")
+month_day_of_week = input.string("Tuesday", "Day of Week",
+    options=["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"])
+month_week_number = input.int(2, "Week Number", tooltip="Which week of the month (1-4)", minval=1, maxval=4)
+month_hour = input.int(4, "Hour", tooltip="Hour in 24-hour format", minval=0, maxval=23)
+month_minute = input.int(0, "Minute", minval=0, maxval=59)
+
+// Line display settings
+month_full_day = input.bool(false, "Full Day", tooltip="Draw line for entire day")
+month_length_minutes = input.int(4320, "Length Minutes", tooltip="Line length in minutes (if not full day)", minval=1)
+month_color = input.color(color.maroon, "Month Line Color")
+month_width = input.int(1, "Month Line Width", minval=1, maxval=5)
+month_style = input.string("Solid", "Month Line Style", options=["Solid", "Dashed", "Dotted"])
+
+// Price mode
+price_mode = input.string("Open", "Price Mode", options=["Open", "High", "Low", "Close", "Median", "Typical", "Weighted"])
+
+// History settings
+months_back = input.int(12, "Months Back", tooltip="How many past months to show", minval=1, maxval=60)
+draw_in_future = input.bool(false, "Draw in Future", tooltip="Draw future month lines")
+
+// === HELPER FUNCTIONS ===
+// Convert day of week string to number (0=Sunday, 1=Monday, etc.)
+day_of_week_to_number(dow_str) =>
+    switch dow_str
+        "Sunday" => 0
+        "Monday" => 1
+        "Tuesday" => 2
+        "Wednesday" => 3
+        "Thursday" => 4
+        "Friday" => 5
+        "Saturday" => 6
+        => 1  // Default to Monday
+
+// Convert line style string to Pine Script constant
+get_line_style() =>
+    switch month_style
+        "Dashed" => line.style_dashed
+        "Dotted" => line.style_dotted
+        => line.style_solid
+
+// Get days in month
+days_in_month(year, month) =>
+    if month == 1 or month == 3 or month == 5 or month == 7 or month == 8 or month == 10 or month == 12
+        31
+    else if month == 4 or month == 6 or month == 9 or month == 11
+        30
+    else if month == 2
+        // Leap year calculation
+        is_leap = (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0)
+        is_leap ? 29 : 28
+    else
+        30
+
+// Get nth weekday of month
+get_nth_weekday_of_month(year, month, weekday_num, n) =>
+    if n < 1
+        n := 1
+
+    // Create first day of month
+    first_day_timestamp = timestamp(year, month, 1, 0, 0, 0)
+    first_dow = dayofweek(first_day_timestamp)
+
+    // Calculate days to target weekday
+    delta = weekday_num - first_dow
+    if delta < 0
+        delta += 7
+
+    // Calculate target day of month
+    day_of_month = 1 + delta + 7 * (n - 1)
+
+    // Check if day exists in month
+    if day_of_month > days_in_month(year, month)
+        na
+    else
+        timestamp(year, month, day_of_month, 0, 0, 0)
+
+// Get price at specific time
+get_price_at_time(target_time, mode) =>
+    // Find the bar closest to target time
+    bar_time = time
+    if math.abs(bar_time - target_time) < 86400000  // Within 1 day
+        switch mode
+            "Open" => open
+            "High" => high
+            "Low" => low
+            "Close" => close
+            "Median" => (high + low) / 2.0
+            "Typical" => (high + low + close) / 3.0
+            "Weighted" => (high + low + close * 2) / 4.0
+            => open
+    else
+        na
+
+// === MAIN LOGIC ===
+var line[] month_lines = array.new<line>()
+
+if month_enable and barstate.islast
+    // Clean up old lines
+    for i = 0 to array.size(month_lines) - 1
+        line.delete(array.get(month_lines, i))
+    array.clear(month_lines)
+
+    current_time = time
+    current_year = year(current_time)
+    current_month = month(current_time)
+
+    target_weekday = day_of_week_to_number(month_day_of_week)
+
+    // Draw lines for past months
+    for k = 0 to months_back - 1
+        // Calculate target month/year
+        target_month = current_month - k
+        target_year = current_year
+
+        // Handle year rollover
+        while target_month <= 0
+            target_month += 12
+            target_year -= 1
+
+        // Get the nth weekday of the target month
+        day_00 = get_nth_weekday_of_month(target_year, target_month, target_weekday, month_week_number)
+
+        if not na(day_00)
+            // Calculate start time with hour and minute
+            start_time = day_00 + month_hour * 3600000 + month_minute * 60000
+
+            // Skip future dates if not enabled
+            if not draw_in_future and start_time > current_time
+                continue
+
+            // Calculate end time
+            length_minutes = month_full_day ? 1440 : month_length_minutes
+            if length_minutes <= 0
+                continue
+
+            end_time = start_time + length_minutes * 60000
+
+            // Get price level (simplified - uses current bar's data)
+            price_level = switch price_mode
+                "Open" => open
+                "High" => high
+                "Low" => low
+                "Close" => close
+                "Median" => (high + low) / 2.0
+                "Typical" => (high + low + close) / 3.0
+                "Weighted" => (high + low + close * 2) / 4.0
+                => open
+
+            if not na(price_level)
+                // Convert timestamps to bar indices
+                // Find the bar closest to the start time
+                start_bar_index = bar_index
+                for j = 0 to math.min(bar_index, 200)
+                    if math.abs(time[j] - start_time) < math.abs(time[start_bar_index - bar_index] - start_time)
+                        start_bar_index := bar_index - j
+
+                // Calculate end bar index based on duration
+                duration_bars = math.max(1, math.round((end_time - start_time) / (timeframe.in_seconds(timeframe.period) * 1000)))
+                end_bar_index = start_bar_index + duration_bars
+
+                // Create horizontal line
+                month_line = line.new(
+                    x1=start_bar_index,
+                    y1=price_level,
+                    x2=end_bar_index,
+                    y2=price_level,
+                    color=month_color,
+                    width=month_width,
+                    style=get_line_style()
+                )
+                array.push(month_lines, month_line)
+
+// Display current settings in a label for debugging
+if barstate.islast and month_enable
+    debug_text = "Month True Open\n" +
+                 "Day: " + month_day_of_week + "\n" +
+                 "Week: " + str.tostring(month_week_number) + "\n" +
+                 "Time: " + str.format("{0,number,00}:{1,number,00}", month_hour, month_minute)
+
+    label.new(
+        x=bar_index - 50,
+        y=high,
+        text=debug_text,
+        color=color.new(month_color, 80),
+        textcolor=color.white,
+        style=label.style_label_down,
+        size=size.small
+    )
+
+// Plot invisible line to ensure indicator runs
+plot(na, title="Month True Open")
+
+// === NOTES ===
+// This Pine Script version adapts the MT4 Month True Open indicator for TradingView
+//
+// Key features:
+// 1. Draws horizontal lines at specific times based on monthly cycles
+// 2. Configurable day of week and week number within month
+// 3. Multiple price mode options (Open, High, Low, Close, etc.)
+// 4. Customizable line appearance and duration
+// 5. Historical line drawing for specified number of months back
+//
+// Differences from MT4 version:
+// 1. Simplified price calculation (uses current bar data)
+// 2. Limited to drawing horizontal lines at consistent price levels
+// 3. Cannot dynamically fetch historical price data at exact times
+//
+// The indicator helps identify important monthly cycle timing points
+// commonly used in institutional trading analysis

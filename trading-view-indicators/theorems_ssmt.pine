@@ -1,0 +1,201 @@
+//@version=6
+indicator("Theorems SSMT", overlay=true, max_bars_back=500, max_labels_count=500, max_lines_count=500)
+
+// Input parameters
+enforceM15 = input.bool(true, "Enforce M15 Timeframe")
+
+// Quarter start times
+q1Start = input.string("20:30", "Q1 Start Time", group="Quarter Times")
+q2Start = input.string("02:30", "Q2 Start Time", group="Quarter Times")
+q3Start = input.string("08:30", "Q3 Start Time", group="Quarter Times")
+q4Start = input.string("14:30", "Q4 Start Time", group="Quarter Times")
+
+// Symbol selection
+useSymbol1 = input.bool(true, "Use Symbol 1", group="Symbols")
+symbol1 = input.string("US500", "Symbol 1", group="Symbols")
+
+useSymbol2 = input.bool(true, "Use Symbol 2", group="Symbols")
+symbol2 = input.string("US30", "Symbol 2", group="Symbols")
+
+useSymbol3 = input.bool(false, "Use Symbol 3", group="Symbols")
+symbol3 = input.string("NAS100", "Symbol 3", group="Symbols")
+
+useSymbol4 = input.bool(false, "Use Symbol 4", group="Symbols")
+symbol4 = input.string("GER40", "Symbol 4", group="Symbols")
+
+// Signal visibility
+showSSMT1 = input.bool(true, "Show SSMT1", group="Signal Types")
+showSSMT2 = input.bool(true, "Show SSMT2", group="Signal Types")
+showHiddenSSMT1 = input.bool(true, "Show Hidden SSMT1", group="Signal Types")
+showHiddenSSMT2 = input.bool(true, "Show Hidden SSMT2", group="Signal Types")
+
+// Colors for quarter transitions
+clrQ1Q2 = input.color(color.red, "Q1→Q2 Color", group="Colors")
+clrQ2Q3 = input.color(color.rgb(30, 144, 255), "Q2→Q3 Color", group="Colors")
+clrQ3Q4 = input.color(color.lime, "Q3→Q4 Color", group="Colors")
+clrQ4Q1 = input.color(color.orange, "Q4→Q1 Color", group="Colors")
+
+// Visual settings
+drawLabels = input.bool(true, "Draw Labels", group="Visuals")
+drawLines = input.bool(true, "Draw Lines", group="Visuals")
+lineWidth = input.int(2, "Line Width", minval=1, maxval=5, group="Visuals")
+
+barsToBackpaint = input.int(500, "Bars to Backpaint", minval=10, maxval=2000, group="Settings")
+priceEpsilonPoints = input.float(0.5, "Price Epsilon Points", minval=0.1, group="Settings")
+
+// Alerts
+enableAlerts = input.bool(false, "Enable Alerts", group="Alerts")
+
+// Parse time string to minutes
+parseTime(timeStr) =>
+    parts = str.split(timeStr, ":")
+    if array.size(parts) == 2
+        hours = str.tonumber(array.get(parts, 0))
+        mins = str.tonumber(array.get(parts, 1))
+        int(hours * 60 + mins)
+    else
+        -1
+
+// Get quarter for a given time
+getQuarter(hour, minute) =>
+    currentMinutes = hour * 60 + minute
+    q1Min = parseTime(q1Start)
+    q2Min = parseTime(q2Start)
+    q3Min = parseTime(q3Start)
+    q4Min = parseTime(q4Start)
+
+    quarter = 0
+    if currentMinutes >= q1Min and currentMinutes < q2Min
+        quarter := 1
+    else if currentMinutes >= q2Min and currentMinutes < q3Min
+        quarter := 2
+    else if currentMinutes >= q3Min and currentMinutes < q4Min
+        quarter := 3
+    else if currentMinutes >= q4Min or currentMinutes < q1Min
+        quarter := 4
+    quarter
+
+// Get quarter transition color
+getTransitionColor(prevQ, curQ) =>
+    color result = color.white
+    if prevQ == 1 and curQ == 2
+        result := clrQ1Q2
+    else if prevQ == 2 and curQ == 3
+        result := clrQ2Q3
+    else if prevQ == 3 and curQ == 4
+        result := clrQ3Q4
+    else if prevQ == 4 and curQ == 1
+        result := clrQ4Q1
+    result
+
+// Function to get quarter stats
+getQuarterStats(sym, qStart, qEnd) =>
+    wickHigh = request.security(sym, timeframe.period, ta.highest(high, math.max(1, bar_index - ta.barssince(time >= qStart and time < qEnd))))
+    wickLow = request.security(sym, timeframe.period, ta.lowest(low, math.max(1, bar_index - ta.barssince(time >= qStart and time < qEnd))))
+
+    bodyHigh = request.security(sym, timeframe.period, ta.highest(math.max(open, close), math.max(1, bar_index - ta.barssince(time >= qStart and time < qEnd))))
+    bodyLow = request.security(sym, timeframe.period, ta.lowest(math.min(open, close), math.max(1, bar_index - ta.barssince(time >= qStart and time < qEnd))))
+
+    [wickHigh, wickLow, bodyHigh, bodyLow]
+
+// Check for SSMT signals
+checkSignals(baseSymbol, cmpSymbol, enabled) =>
+    if not enabled
+        [false, false, false, false, false, false, false, false]
+    else
+        // Get current bar data for comparison symbol
+        cmpOpen = request.security(cmpSymbol, timeframe.period, open)
+        cmpHigh = request.security(cmpSymbol, timeframe.period, high)
+        cmpLow = request.security(cmpSymbol, timeframe.period, low)
+        cmpClose = request.security(cmpSymbol, timeframe.period, close)
+
+        // Get previous quarter for both symbols
+        currentQ = getQuarter(hour, minute)
+        prevQ = getQuarter(hour[1], minute[1])
+
+        // Calculate quarter boundaries (simplified)
+        qStartTime = timestamp(year, month, dayofmonth, 0, 0, 0)
+        qEndTime = timestamp(year, month, dayofmonth, 23, 59, 59)
+
+        // Get quarter stats for both symbols
+        [baseWickHigh, baseWickLow, baseBodyHigh, baseBodyLow] = getQuarterStats(baseSymbol, qStartTime, qEndTime)
+        [cmpWickHigh, cmpWickLow, cmpBodyHigh, cmpBodyLow] = getQuarterStats(cmpSymbol, qStartTime, qEndTime)
+
+        eps = priceEpsilonPoints * syminfo.mintick
+
+        // SSMT1: Close vs Previous Wick
+        baseCloseAboveWick = close > baseWickHigh[1] + eps
+        baseCloseBelowWick = close < baseWickLow[1] - eps
+        cmpCloseAboveWick = cmpClose > cmpWickHigh[1] + eps
+        cmpCloseBelowWick = cmpClose < cmpWickLow[1] - eps
+
+        ssmt1High = showSSMT1 and baseCloseAboveWick != cmpCloseAboveWick
+        ssmt1Low = showSSMT1 and baseCloseBelowWick != cmpCloseBelowWick
+
+        // SSMT2: Wick vs Previous Wick
+        baseWickAboveWick = high > baseWickHigh[1] + eps
+        baseWickBelowWick = low < baseWickLow[1] - eps
+        cmpWickAboveWick = cmpHigh > cmpWickHigh[1] + eps
+        cmpWickBelowWick = cmpLow < cmpWickLow[1] - eps
+
+        ssmt2High = showSSMT2 and baseWickAboveWick != cmpWickAboveWick
+        ssmt2Low = showSSMT2 and baseWickBelowWick != cmpWickBelowWick
+
+        // Hidden SSMT1: Wick vs Previous Body
+        baseWickAboveBody = high > baseBodyHigh[1] + eps
+        baseWickBelowBody = low < baseBodyLow[1] - eps
+        cmpWickAboveBody = cmpHigh > cmpBodyHigh[1] + eps
+        cmpWickBelowBody = cmpLow < cmpBodyLow[1] - eps
+
+        hSsmt1High = showHiddenSSMT1 and baseWickAboveBody != cmpWickAboveBody
+        hSsmt1Low = showHiddenSSMT1 and baseWickBelowBody != cmpWickBelowBody
+
+        // Hidden SSMT2: Close vs Previous Body
+        baseCloseAboveBody = close > baseBodyHigh[1] + eps
+        baseCloseBelowBody = close < baseBodyLow[1] - eps
+        cmpCloseAboveBody = cmpClose > cmpBodyHigh[1] + eps
+        cmpCloseBelowBody = cmpClose < cmpBodyLow[1] - eps
+
+        hSsmt2High = showHiddenSSMT2 and baseCloseAboveBody != cmpCloseAboveBody
+        hSsmt2Low = showHiddenSSMT2 and baseCloseBelowBody != cmpCloseBelowBody
+
+        [ssmt1High, ssmt1Low, ssmt2High, ssmt2Low, hSsmt1High, hSsmt1Low, hSsmt2High, hSsmt2Low]
+
+// Main logic
+if enforceM15 and timeframe.period != "15"
+    label.new(bar_index, high, "Please use 15-minute timeframe", color=color.red, style=label.style_label_down)
+else
+    // Process signals for each comparison symbol
+    currentQ = getQuarter(hour, minute)
+    prevQ = getQuarter(hour[1], minute[1])
+    transColor = getTransitionColor(prevQ, currentQ)
+
+    // Check Symbol 1
+    [s1_ssmt1H, s1_ssmt1L, s1_ssmt2H, s1_ssmt2L, s1_hssmt1H, s1_hssmt1L, s1_hssmt2H, s1_hssmt2L] = checkSignals(syminfo.tickerid, symbol1, useSymbol1)
+
+    // Draw signals for Symbol 1
+    if s1_ssmt1H and drawLabels
+        label.new(bar_index, high + (high - low) * 0.1, "SSMT1↑ vs " + symbol1, color=transColor, style=label.style_label_up, size=size.small)
+    if s1_ssmt1L and drawLabels
+        label.new(bar_index, low - (high - low) * 0.1, "SSMT1↓ vs " + symbol1, color=transColor, style=label.style_label_down, size=size.small)
+
+    if s1_ssmt2H and drawLabels
+        label.new(bar_index, high + (high - low) * 0.2, "SSMT2↑ vs " + symbol1, color=transColor, style=label.style_label_up, size=size.small)
+    if s1_ssmt2L and drawLabels
+        label.new(bar_index, low - (high - low) * 0.2, "SSMT2↓ vs " + symbol1, color=transColor, style=label.style_label_down, size=size.small)
+
+    // Check Symbol 2
+    [s2_ssmt1H, s2_ssmt1L, s2_ssmt2H, s2_ssmt2L, s2_hssmt1H, s2_hssmt1L, s2_hssmt2H, s2_hssmt2L] = checkSignals(syminfo.tickerid, symbol2, useSymbol2)
+
+    // Draw signals for Symbol 2
+    if s2_ssmt1H and drawLabels
+        label.new(bar_index, high + (high - low) * 0.3, "SSMT1↑ vs " + symbol2, color=transColor, style=label.style_label_up, size=size.small)
+    if s2_ssmt1L and drawLabels
+        label.new(bar_index, low - (high - low) * 0.3, "SSMT1↓ vs " + symbol2, color=transColor, style=label.style_label_down, size=size.small)
+
+    // Alerts
+    if enableAlerts
+        if s1_ssmt1H or s1_ssmt1L or s1_ssmt2H or s1_ssmt2L
+            alert("SSMT Signal detected vs " + symbol1, alert.freq_once_per_bar)
+        if s2_ssmt1H or s2_ssmt1L or s2_ssmt2H or s2_ssmt2L
+            alert("SSMT Signal detected vs " + symbol2, alert.freq_once_per_bar)

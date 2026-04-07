@@ -1,0 +1,388 @@
+//@version=6
+indicator("Theorems Sessions Bottom Pane V2 - Week, Month & Year", "Sessions Timeline", overlay=false, max_boxes_count=500, max_labels_count=500)
+
+// === CONFIGURATION ===
+// Display settings
+show_labels = input.bool(true, "Show Session Labels", group="Display")
+label_size = input.string("small", "Label Size", options=["tiny", "small", "normal"], group="Display")
+
+// Layer enables
+enable_year = input.bool(true, "Enable Year Sessions", group="Layers")
+enable_month = input.bool(true, "Enable Month Sessions", group="Layers")
+enable_week = input.bool(true, "Enable Week Sessions", group="Layers")
+
+// Month Cycle Settings (from MT4 lines 247-262)
+// Default: Start on Tuesday (2) at midnight (00:00)
+month_start_dow = input.int(2, "Month Cycle Start DOW", minval=0, maxval=6, group="Month Cycle", tooltip="0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday")
+month_start_hour = input.int(0, "Month Cycle Start Hour", minval=0, maxval=23, group="Month Cycle")
+month_start_minute = input.int(0, "Month Cycle Start Minute", minval=0, maxval=59, group="Month Cycle")
+
+// Week Cycle Settings (based on MT4 lines 210-246)
+// Default: Monday-Tuesday, Wednesday-Thursday, Friday, Saturday-Sunday pattern
+week_enable = input.bool(true, "Enable Week Cycle", group="Week Cycle")
+
+// Week Cycle Colors (5 quarters for trading days)
+week_q1_color = input.color(color.new(color.gray, 80), "Week Q1 Color (Mon)", group="Week Cycle")      // Gray
+week_q2_color = input.color(color.new(color.red, 80), "Week Q2 Color (Tue)", group="Week Cycle")       // Red
+week_q3_color = input.color(color.new(color.green, 80), "Week Q3 Color (Wed)", group="Week Cycle")     // Green
+week_q4_color = input.color(color.new(color.blue, 80), "Week Q4 Color (Thu)", group="Week Cycle")      // Blue
+week_q5_color = input.color(color.new(color.purple, 80), "Week Q5 Color (Fri)", group="Week Cycle")    // Purple
+
+// Year Cycle Colors
+year_q1_color = input.color(color.new(color.gray, 80), "Year Q1 Color (Jan-Mar)", group="Year Cycle")  // Q1: Jan-Mar
+year_q2_color = input.color(color.new(color.red, 80), "Year Q2 Color (Apr-Jun)", group="Year Cycle")   // Q2: Apr-Jun
+year_q3_color = input.color(color.new(color.green, 80), "Year Q3 Color (Jul-Sep)", group="Year Cycle") // Q3: Jul-Sep
+year_q4_color = input.color(color.new(color.blue, 80), "Year Q4 Color (Oct-Dec)", group="Year Cycle")  // Q4: Oct-Dec
+
+// Month Cycle Colors
+month_q1_color = input.color(color.new(color.gray, 80), "Month Week 1 Color", group="Month Cycle")  // Gray (similar to LightSlateGray)
+month_q2_color = input.color(color.new(color.red, 80), "Month Week 2 Color", group="Month Cycle")  // Maroon
+month_q3_color = input.color(color.new(color.green, 80), "Month Week 3 Color", group="Month Cycle")  // Green
+month_q4_color = input.color(color.new(color.blue, 80), "Month Week 4 Color", group="Month Cycle")  // Navy (MidnightBlue)
+
+// === STATE VARIABLES ===
+// Year session tracking
+var int currentYearQuarter = -1
+var box yearBox = na
+
+// Month session tracking
+var int currentMonthWeek = -1
+var box monthBox = na
+var int monthCycleStartBar = na
+var int monthCycleStartTime = na
+var int weekStartBarIndex = na
+
+// Week session tracking
+var int currentWeekQuarter = -1
+var box weekBox = na
+
+// Arrays for managing multiple boxes and labels
+var box[] allBoxes = array.new<box>()
+var label[] allLabels = array.new<label>()
+
+// === HELPER FUNCTIONS ===
+
+// Get border color based on chart theme (dark/light mode)
+getBorderColor() =>
+    // For now, use white borders (good for both themes)
+    // Later can be enhanced with proper theme detection
+    color.white
+
+// Get text color based on chart theme (dark/light mode)
+getTextColor() =>
+    // For now, use white text (good for both themes)
+    // Later can be enhanced with proper theme detection
+    color.white
+
+// Get color for year quarter
+getYearColor(quarterNum) =>
+    switch quarterNum
+        0 => year_q1_color
+        1 => year_q2_color
+        2 => year_q3_color
+        3 => year_q4_color
+        => color.gray
+
+// Get color for month week
+getMonthColor(weekNum) =>
+    switch weekNum
+        0 => month_q1_color
+        1 => month_q2_color
+        2 => month_q3_color
+        3 => month_q4_color
+        => color.gray
+
+// Get year label text
+getYearLabel(quarterNum) =>
+    "Y-Q" + str.tostring(quarterNum + 1)
+
+// Get month label text
+getMonthLabel(weekNum) =>
+    "M-Q" + str.tostring(weekNum + 1)
+
+// Get color for week quarter (5 quarters)
+getWeekColor(quarterNum) =>
+    switch quarterNum
+        0 => week_q1_color
+        1 => week_q2_color
+        2 => week_q3_color
+        3 => week_q4_color
+        4 => week_q5_color
+        => color.gray
+
+// Get week label text
+getWeekLabel(quarterNum) =>
+    "W-Q" + str.tostring(quarterNum + 1)
+
+// === WEEK CYCLE LOGIC ===
+// Based on 5-quarter weekly pattern: Mon, Tue, Wed, Thu, Fri (trading days)
+
+// Get week quarter (0-4) based on trading day of week
+getWeekQuarter(currentTime) =>
+    dow = dayofweek(currentTime)  // Pine Script: 1=Sunday, 2=Monday, ..., 7=Saturday
+
+    // Map trading days to quarters (Mon-Fri = W-Q1 to W-Q5)
+    if dow == 2      // Monday
+        0  // W-Q1: Mon
+    else if dow == 3 // Tuesday
+        1  // W-Q2: Tue
+    else if dow == 4 // Wednesday
+        2  // W-Q3: Wed
+    else if dow == 5 // Thursday
+        3  // W-Q4: Thu
+    else if dow == 6 // Friday
+        4  // W-Q5: Fri
+    else // Weekend (Saturday=7, Sunday=1) - use Friday's quarter
+        4  // W-Q5: Weekend continues Friday
+
+// === MT4 MONTH CYCLE LOGIC ===
+// Based on BuildLayer3Monthly4Weeks (lines 1001-1060)
+
+// Find the first occurrence of target DOW in the current or previous month
+findMonthCycleStart(currentTime) =>
+    // Get current date components
+    y = year(currentTime)
+    m = month(currentTime)
+    d = dayofmonth(currentTime)
+
+    // Find first occurrence of target DOW in current month
+    firstOfMonth = timestamp(y, m, 1, month_start_hour, month_start_minute, 0)
+    firstDow = dayofweek(firstOfMonth) - 1  // Convert to 0=Sunday format
+
+    // Calculate days to add to get to target DOW
+    daysToAdd = month_start_dow == firstDow ? 0 : (month_start_dow - firstDow + 7) % 7
+
+    // First occurrence of target DOW in current month
+    cycleStartThisMonth = firstOfMonth + (daysToAdd * 86400000)
+
+    // If we're before the cycle start for this month, use previous month's cycle
+    if currentTime < cycleStartThisMonth
+        // Go to previous month
+        prevM = m - 1
+        prevY = y
+        if prevM < 1
+            prevM := 12
+            prevY := y - 1
+
+        firstOfPrevMonth = timestamp(prevY, prevM, 1, month_start_hour, month_start_minute, 0)
+        firstDowPrev = dayofweek(firstOfPrevMonth) - 1
+        daysToAddPrev = month_start_dow == firstDowPrev ? 0 : (month_start_dow - firstDowPrev + 7) % 7
+        cycleStartPrevMonth = firstOfPrevMonth + (daysToAddPrev * 86400000)
+        cycleStartPrevMonth
+    else
+        cycleStartThisMonth
+
+// Calculate which week (0-3) we're in within the month cycle
+getMonthWeek(currentTime) =>
+    cycleStart = findMonthCycleStart(currentTime)
+
+    // Calculate weeks elapsed since cycle start
+    msElapsed = currentTime - cycleStart
+    weeksElapsed = math.floor(msElapsed / (7 * 86400000))  // 7 days in milliseconds
+
+    // Return week number (0-3), capped at 3 for week 4+
+    math.min(weeksElapsed, 3)
+
+// === YEAR FUNCTIONS ===
+
+// Get year quarter (0-3) based on month
+getYearQuarter(currentTime) =>
+    m = month(currentTime)
+    if m <= 3
+        0  // Q1: Jan-Mar
+    else if m <= 6
+        1  // Q2: Apr-Jun
+    else if m <= 9
+        2  // Q3: Jul-Sep
+    else
+        3  // Q4: Oct-Dec
+
+// === LAYER POSITIONING ===
+layer_height = 30
+base_y = 10
+year_y = base_y                       // Bottom layer
+month_y = base_y + layer_height       // Middle layer
+week_y = base_y + (2 * layer_height)  // Top layer
+
+// === MAIN LOGIC ===
+
+currentTime = time
+
+// Calculate current sessions
+newYearQuarter = getYearQuarter(currentTime)
+newMonthWeek = getMonthWeek(currentTime)
+newWeekQuarter = getWeekQuarter(currentTime)
+
+// === YEAR SESSION HANDLING ===
+if enable_year
+    // Check if year quarter changed
+    if newYearQuarter != currentYearQuarter
+        // Close previous box
+        if not na(yearBox)
+            box.set_right(yearBox, bar_index)
+
+        // Create new box for year quarter
+        yearBox := box.new(
+            left=bar_index,
+            top=year_y + layer_height,
+            right=bar_index + 1,
+            bottom=year_y,
+            bgcolor=getYearColor(newYearQuarter),
+            border_color=getBorderColor(),
+            border_width=1,
+            border_style=line.style_solid
+        )
+        array.push(allBoxes, yearBox)
+
+        // Add label for year quarter
+        if show_labels
+            lbl = label.new(
+                x=bar_index,
+                y=year_y + layer_height/2,
+                text=getYearLabel(newYearQuarter),
+                style=label.style_label_left,
+                color=color.new(color.black, 100),
+                textcolor=getTextColor(),
+                size=label_size == "tiny" ? size.tiny : label_size == "normal" ? size.normal : size.small
+            )
+            array.push(allLabels, lbl)
+
+        currentYearQuarter := newYearQuarter
+    else
+        // Extend current year box
+        if not na(yearBox)
+            box.set_right(yearBox, bar_index + 1)
+
+// === MONTH SESSION HANDLING ===
+if enable_month
+    // Check if month week changed
+    if newMonthWeek != currentMonthWeek
+        // Find the exact cycle start time for this week
+        cycleStart = findMonthCycleStart(currentTime)
+        weekStartTime = cycleStart + (newMonthWeek * 7 * 86400000)
+
+        // Close previous box at the correct end time
+        if not na(monthBox)
+            // For week 4 (Q4), limit box to exactly 7 days from its start
+            if currentMonthWeek == 3 and not na(weekStartBarIndex)
+                // Calculate bars in 7 days (approximation)
+                maxBarsInWeek = bar_index - weekStartBarIndex
+                box.set_right(monthBox, bar_index)
+            else
+                box.set_right(monthBox, bar_index)
+
+        // Check if we should create a new box (skip if beyond 4 weeks)
+        weeksElapsed = math.floor((currentTime - cycleStart) / (7 * 86400000))
+        if weeksElapsed < 4
+            // Create new box for this week
+            monthBox := box.new(
+                left=bar_index,
+                top=month_y + layer_height,
+                right=bar_index + 1,
+                bottom=month_y,
+                bgcolor=getMonthColor(newMonthWeek),
+                border_color=getBorderColor(),
+                border_width=1,
+                border_style=line.style_solid
+            )
+            array.push(allBoxes, monthBox)
+            weekStartBarIndex := bar_index
+
+            // Add label at the start of the week
+            if show_labels
+                lbl = label.new(
+                    x=bar_index,
+                    y=month_y + layer_height/2,
+                    text=getMonthLabel(newMonthWeek),
+                    style=label.style_label_left,
+                    color=color.new(color.black, 100),
+                    textcolor=getTextColor(),
+                    size=label_size == "tiny" ? size.tiny : label_size == "normal" ? size.normal : size.small
+                )
+                array.push(allLabels, lbl)
+        else
+            // Beyond 4 weeks, set monthBox to na to stop extending
+            monthBox := na
+
+        currentMonthWeek := newMonthWeek
+        monthCycleStartBar := bar_index
+        monthCycleStartTime := weekStartTime
+
+    else if not na(monthBox)
+        // Check if we're still within the 4-week cycle
+        cycleStart = findMonthCycleStart(currentTime)
+        weeksElapsed = math.floor((currentTime - cycleStart) / (7 * 86400000))
+
+        if weeksElapsed < 4
+            // Extend current box only if within 4 weeks
+            box.set_right(monthBox, bar_index + 1)
+        else
+            // Stop extending after 4 weeks
+            monthBox := na
+
+
+// === WEEK SESSION HANDLING ===
+if enable_week and week_enable
+    // Check if week quarter changed
+    if newWeekQuarter != currentWeekQuarter
+        // Close previous box
+        if not na(weekBox)
+            box.set_right(weekBox, bar_index)
+
+        // Create new box for week quarter
+        weekBox := box.new(
+            left=bar_index,
+            top=week_y + layer_height,
+            right=bar_index + 1,
+            bottom=week_y,
+            bgcolor=getWeekColor(newWeekQuarter),
+            border_color=getBorderColor(),
+            border_width=1,
+            border_style=line.style_solid
+        )
+        array.push(allBoxes, weekBox)
+
+        // Add label for week quarter
+        if show_labels
+            lbl = label.new(
+                x=bar_index,
+                y=week_y + layer_height/2,
+                text=getWeekLabel(newWeekQuarter),
+                style=label.style_label_left,
+                color=color.new(color.black, 100),
+                textcolor=getTextColor(),
+                size=label_size == "tiny" ? size.tiny : label_size == "normal" ? size.normal : size.small
+            )
+            array.push(allLabels, lbl)
+
+        currentWeekQuarter := newWeekQuarter
+    else
+        // Extend current week box
+        if not na(weekBox)
+            box.set_right(weekBox, bar_index + 1)
+
+// === CLEANUP ===
+// Limit the number of boxes and labels to prevent memory issues
+// Increased limits to allow for historical context
+while array.size(allBoxes) > 500  // Increased from 50 to match max_boxes_count
+    oldBox = array.shift(allBoxes)
+    if not na(oldBox)
+        box.delete(oldBox)
+
+while array.size(allLabels) > 500  // Increased from 50 to match max_labels_count
+    oldLabel = array.shift(allLabels)
+    if not na(oldLabel)
+        label.delete(oldLabel)
+
+// === VISUAL GUIDES ===
+// Draw all guide lines (hline can't be used in conditional scope)
+hline(week_y + layer_height, "Week Top", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
+hline(week_y, "Week Bottom", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
+hline(month_y + layer_height, "Month Top", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
+hline(month_y, "Month Bottom", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
+hline(year_y + layer_height, "Year Top", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
+hline(year_y, "Year Bottom", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
+
+// Plot to maintain scale
+max_y = enable_week ? week_y + layer_height : enable_month ? month_y + layer_height : year_y + layer_height
+plot(max_y/2, "", color.new(color.white, 100), display=display.none)

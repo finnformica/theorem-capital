@@ -5,7 +5,6 @@ Checks for common Pine Script v6 compatibility issues.
 """
 
 import re
-import os
 
 class PineScriptValidator:
     """Validates Pine Script code for common syntax and compatibility issues"""
@@ -27,11 +26,11 @@ class PineScriptValidator:
     def check_deprecated_functions(self, code):
         """Check for deprecated function calls"""
         deprecated_functions = {
-            r'\bint\s*\(': 'int() is deprecated, use math.floor() instead',
-            r'\bround\s*\(': 'round() is deprecated, use math.round() instead',
-            r'\babs\s*\(': 'abs() is deprecated, use math.abs() instead',
-            r'\bmax\s*\(': 'max() is deprecated, use math.max() instead',
-            r'\bmin\s*\(': 'min() is deprecated, use math.min() instead'
+            r'(?<!input\.)\bint\s*\(': 'int() is deprecated, use math.floor() instead',
+            r'(?<!math\.)\bround\s*\(': 'round() is deprecated, use math.round() instead',
+            r'(?<!math\.)\babs\s*\(': 'abs() is deprecated, use math.abs() instead',
+            r'(?<!math\.)\bmax\s*\(': 'max() is deprecated, use math.max() instead',
+            r'(?<!math\.)\bmin\s*\(': 'min() is deprecated, use math.min() instead'
         }
 
         for pattern, message in deprecated_functions.items():
@@ -134,9 +133,17 @@ class PineScriptValidator:
 
 def main():
     """Run Pine Script validation on the indicator file"""
+    import sys
     validator = PineScriptValidator()
 
-    indicator_path = "/Users/finnformica/Documents/programming/theorem-capital/trading-view-indicators/theorems_sessions_bottom_pane.pine"
+    # Allow passing file path as argument, default to v2
+    if len(sys.argv) > 1:
+        indicator_path = sys.argv[1]
+        # If it's just a filename, prepend the path
+        if not indicator_path.startswith('/'):
+            indicator_path = f"/Users/finnformica/Documents/programming/theorem-capital/trading-view-indicators/{indicator_path}"
+    else:
+        indicator_path = "/Users/finnformica/Documents/programming/theorem-capital/trading-view-indicators/theorems_sessions_bottom_pane_v2.pine"
 
     result = validator.validate_file(indicator_path)
     validator.print_report(result)

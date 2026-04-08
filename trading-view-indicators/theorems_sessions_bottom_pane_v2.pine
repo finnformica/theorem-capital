@@ -1,53 +1,32 @@
 //@version=6
-indicator("Theorems Sessions Bottom Pane V2 - Week, Month & Year", "Sessions Timeline", overlay=false, max_boxes_count=500, max_labels_count=500)
+indicator("Theorems Sessions Bottom Pane V2 - Month & Year", "Sessions Timeline", overlay=false, max_boxes_count=500, max_labels_count=500)
 
 // === CONFIGURATION ===
-// Display settings
 show_labels = input.bool(true, "Show Session Labels", group="Display")
 label_size = input.string("small", "Label Size", options=["tiny", "small", "normal"], group="Display")
 
 // Layer enables
 enable_year = input.bool(true, "Enable Year Sessions", group="Layers")
 enable_month = input.bool(true, "Enable Month Sessions", group="Layers")
-enable_week = input.bool(true, "Enable Week Sessions", group="Layers")
 
-// Month Cycle Settings (from MT4 lines 247-262)
-// Default: Start on Tuesday (2) at midnight (00:00)
+// Universal Quarter Colors
+q1_color = input.color(color.new(color.gray, 80), "Quarter 1 Color", group="Colors")
+q2_color = input.color(color.new(color.red, 80), "Quarter 2 Color", group="Colors")
+q3_color = input.color(color.new(color.green, 80), "Quarter 3 Color", group="Colors")
+q4_color = input.color(color.new(color.blue, 80), "Quarter 4 Color", group="Colors")
+
+// Month Cycle Settings
 month_start_dow = input.int(2, "Month Cycle Start DOW", minval=0, maxval=6, group="Month Cycle", tooltip="0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday")
 month_start_hour = input.int(0, "Month Cycle Start Hour", minval=0, maxval=23, group="Month Cycle")
 month_start_minute = input.int(0, "Month Cycle Start Minute", minval=0, maxval=59, group="Month Cycle")
 
-// Week Cycle Settings (based on MT4 lines 210-246)
-// Default: Monday-Tuesday, Wednesday-Thursday, Friday, Saturday-Sunday pattern
-week_enable = input.bool(true, "Enable Week Cycle", group="Week Cycle")
-
-// Week Cycle Colors (4 quarters)
-week_q1_color = input.color(color.new(color.gray, 80), "Week Q1 Color", group="Week Cycle")      // Gray
-week_q2_color = input.color(color.new(color.red, 80), "Week Q2 Color", group="Week Cycle")       // Red
-week_q3_color = input.color(color.new(color.green, 80), "Week Q3 Color", group="Week Cycle")     // Green
-week_q4_color = input.color(color.new(color.blue, 80), "Week Q4 Color", group="Week Cycle")      // Blue
-
-// Year Cycle Colors
-year_q1_color = input.color(color.new(color.gray, 80), "Year Q1 Color (Jan-Mar)", group="Year Cycle")  // Q1: Jan-Mar
-year_q2_color = input.color(color.new(color.red, 80), "Year Q2 Color (Apr-Jun)", group="Year Cycle")   // Q2: Apr-Jun
-year_q3_color = input.color(color.new(color.green, 80), "Year Q3 Color (Jul-Sep)", group="Year Cycle") // Q3: Jul-Sep
-year_q4_color = input.color(color.new(color.blue, 80), "Year Q4 Color (Oct-Dec)", group="Year Cycle")  // Q4: Oct-Dec
-
-// Month Cycle Colors
-month_q1_color = input.color(color.new(color.gray, 80), "Month Week 1 Color", group="Month Cycle")  // Gray (similar to LightSlateGray)
-month_q2_color = input.color(color.new(color.red, 80), "Month Week 2 Color", group="Month Cycle")  // Maroon
-month_q3_color = input.color(color.new(color.green, 80), "Month Week 3 Color", group="Month Cycle")  // Green
-month_q4_color = input.color(color.new(color.blue, 80), "Month Week 4 Color", group="Month Cycle")  // Navy (MidnightBlue)
-
 // === STATE VARIABLES ===
-// Generic session state management
-var int[] currentPeriods = array.new<int>(3, -1)  // [year, month, week]
-var box[] currentBoxes = array.new<box>(3, na)    // [year, month, week]
+var int[] currentPeriods = array.new<int>(2, -1)  // [year, month]
+var box[] currentBoxes = array.new<box>(2, na)    // [year, month]
 
 // Session type indices
 YEAR_SESSION = 0
 MONTH_SESSION = 1
-WEEK_SESSION = 2
 
 // Arrays for managing multiple boxes and labels
 var box[] allBoxes = array.new<box>()
@@ -55,34 +34,19 @@ var label[] allLabels = array.new<label>()
 
 // === HELPER FUNCTIONS ===
 
-// Get border color based on chart theme (dark/light mode)
 getBorderColor() =>
-    // For now, use white borders (good for both themes)
-    // Later can be enhanced with proper theme detection
     color.white
 
-// Get text color based on chart theme (dark/light mode)
 getTextColor() =>
-    // For now, use white text (good for both themes)
-    // Later can be enhanced with proper theme detection
     color.white
 
-// Get color for year quarter
-getYearColor(quarterNum) =>
+// Get color for any quarter (unified)
+getQuarterColor(quarterNum) =>
     switch quarterNum
-        0 => year_q1_color
-        1 => year_q2_color
-        2 => year_q3_color
-        3 => year_q4_color
-        => color.gray
-
-// Get color for month week
-getMonthColor(weekNum) =>
-    switch weekNum
-        0 => month_q1_color
-        1 => month_q2_color
-        2 => month_q3_color
-        3 => month_q4_color
+        0 => q1_color
+        1 => q2_color
+        2 => q3_color
+        3 => q4_color
         => color.gray
 
 // Get year label text
@@ -93,59 +57,7 @@ getYearLabel(quarterNum) =>
 getMonthLabel(weekNum) =>
     "M-Q" + str.tostring(weekNum + 1)
 
-// Get color for week quarter (4 quarters)
-getWeekColor(quarterNum) =>
-    switch quarterNum
-        0 => week_q1_color
-        1 => week_q2_color
-        2 => week_q3_color
-        3 => week_q4_color
-        => color.gray
-
-// Get week label text
-getWeekLabel(quarterNum) =>
-    "W-Q" + str.tostring(quarterNum + 1)
-
-// === WEEK CYCLE LOGIC ===
-// Dynamic weekly sessions aligned with monthly cycle configuration
-
-// Find the start of the current week based on monthly cycle settings
-getWeekStart(currentTime) =>
-    // Convert Pine Script DOW to standard format
-    currentDow = dayofweek(currentTime)  // 1=Sunday, 2=Monday, ..., 7=Saturday
-
-    // Convert to 0-based indexing to match month_start_dow
-    adjustedDow = currentDow == 1 ? 0 : currentDow - 1  // 0=Sunday, 1=Monday, ..., 6=Saturday
-
-    // Calculate days back to the configured start DOW
-    daysBack = (adjustedDow - month_start_dow + 7) % 7
-
-    // Go back to the start day
-    targetTime = currentTime - (daysBack * 86400000)
-
-    // Align to midnight of that day
-    targetMidnight = targetTime - (targetTime % 86400000)
-
-    // Add the configured start time
-    targetMidnight + (month_start_hour * 3600000) + (month_start_minute * 60000)
-
-// Get week quarter (0-3) - dynamic based on elapsed time since week start
-getWeekQuarter(currentTime) =>
-    weekStart = getWeekStart(currentTime)
-
-    // Calculate time elapsed since week start
-    msElapsed = currentTime - weekStart
-
-    // Convert to days for easier calculation
-    daysElapsed = math.floor(msElapsed / 86400000)
-
-    quarterIndex = daysElapsed % 4
-
-    // Return quarter (0-3), cap at 3
-    quarterIndex
-
-// === MT4 MONTH CYCLE LOGIC ===
-// Based on BuildLayer3Monthly4Weeks (lines 1001-1060)
+// === MONTH CYCLE LOGIC ===
 
 // Find the first occurrence of target DOW in the current or previous month
 findMonthCycleStart(currentTime) =>
@@ -210,11 +122,9 @@ getYearQuarter(currentTime) =>
 layer_height = 30
 base_y = 10
 year_y = base_y                       // Bottom layer
-month_y = base_y + layer_height       // Middle layer
-week_y = base_y + (2 * layer_height)  // Top layer
+month_y = base_y + layer_height       // Top layer
 
 // === GENERIC SESSION HANDLER ===
-// Unified function to handle session box creation and extension
 handleSession(sessionType, newPeriod, layerY, sessionColor, labelPrefix, showLabel) =>
     // Get current state for this session type
     currentPeriod = array.get(currentPeriods, sessionType)
@@ -267,54 +177,41 @@ currentTime = time
 // Calculate current sessions
 newYearQuarter = getYearQuarter(currentTime)
 newMonthWeek = getMonthWeek(currentTime)
-newWeekQuarter = getWeekQuarter(currentTime)
 
 // === YEAR SESSION HANDLING ===
 if enable_year
-    handleSession(YEAR_SESSION, newYearQuarter, year_y, getYearColor(newYearQuarter), "Y-Q", true)
+    handleSession(YEAR_SESSION, newYearQuarter, year_y, getQuarterColor(newYearQuarter), "Y-Q", true)
 
 // === MONTH SESSION HANDLING ===
 if enable_month
-    // Check if we're beyond 4 weeks (handle gap after 4th week)
     cycleStart = findMonthCycleStart(currentTime)
     weeksElapsed = math.floor((currentTime - cycleStart) / (7 * 86400000))
 
-    // Only process if within 4-week cycle
     if weeksElapsed < 4
-        handleSession(MONTH_SESSION, newMonthWeek, month_y, getMonthColor(newMonthWeek), "M-Q", true)
+        handleSession(MONTH_SESSION, newMonthWeek, month_y, getQuarterColor(newMonthWeek), "M-Q", true)
     else
         // Clear the box reference during gap period
         currentBox = array.get(currentBoxes, MONTH_SESSION)
         if not na(currentBox)
             array.set(currentBoxes, MONTH_SESSION, na)
 
-
-// === WEEK SESSION HANDLING ===
-if enable_week and week_enable
-    handleSession(WEEK_SESSION, newWeekQuarter, week_y, getWeekColor(newWeekQuarter), "W-Q", true)
-
 // === CLEANUP ===
-// Limit the number of boxes and labels to prevent memory issues
-// Increased limits to allow for historical context
-while array.size(allBoxes) > 500  // Increased from 50 to match max_boxes_count
+while array.size(allBoxes) > 500
     oldBox = array.shift(allBoxes)
     if not na(oldBox)
         box.delete(oldBox)
 
-while array.size(allLabels) > 500  // Increased from 50 to match max_labels_count
+while array.size(allLabels) > 500
     oldLabel = array.shift(allLabels)
     if not na(oldLabel)
         label.delete(oldLabel)
 
 // === VISUAL GUIDES ===
-// Draw all guide lines (hline can't be used in conditional scope)
-hline(week_y + layer_height, "Week Top", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
-hline(week_y, "Week Bottom", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
 hline(month_y + layer_height, "Month Top", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
 hline(month_y, "Month Bottom", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
 hline(year_y + layer_height, "Year Top", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
 hline(year_y, "Year Bottom", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
 
 // Plot to maintain scale
-max_y = enable_week ? week_y + layer_height : enable_month ? month_y + layer_height : year_y + layer_height
+max_y = enable_month ? month_y + layer_height : year_y + layer_height
 plot(max_y/2, "", color.new(color.white, 100), display=display.none)

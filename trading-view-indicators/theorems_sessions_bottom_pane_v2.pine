@@ -1,5 +1,5 @@
 //@version=6
-indicator("Theorems Sessions Bottom Pane V2 - Month & Year", "Sessions", overlay=false, max_boxes_count=500, max_labels_count=500)
+indicator("Theorems Sessions Bottom Pane V2 - Week, Month & Year", "Sessions", overlay=false, max_boxes_count=500, max_labels_count=500)
 
 // === CONFIGURATION ===
 show_labels = input.bool(true, "Show Session Labels", group="Display")
@@ -8,6 +8,7 @@ label_size = input.string("small", "Label Size", options=["tiny", "small", "norm
 // Layer enables
 enable_year = input.bool(true, "Enable Year Sessions", group="Layers")
 enable_month = input.bool(true, "Enable Month Sessions", group="Layers")
+enable_week = input.bool(true, "Enable Week Sessions", group="Layers")
 
 // Universal Quarter Colors
 q1_color = input.color(color.new(color.gray, 80), "Quarter 1 Color", group="Colors")
@@ -20,13 +21,19 @@ month_start_dow = input.int(2, "Month Cycle Start DOW", minval=0, maxval=6, grou
 month_start_hour = input.int(0, "Month Cycle Start Hour", minval=0, maxval=23, group="Month Cycle")
 month_start_minute = input.int(0, "Month Cycle Start Minute", minval=0, maxval=59, group="Month Cycle")
 
+// Week Cycle Settings
+week_start_dow = input.int(1, "Week Cycle Start DOW", minval=0, maxval=6, group="Week Cycle", tooltip="0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday")
+week_start_hour = input.int(0, "Week Cycle Start Hour", minval=0, maxval=23, group="Week Cycle")
+week_start_minute = input.int(0, "Week Cycle Start Minute", minval=0, maxval=59, group="Week Cycle")
+
 // === STATE VARIABLES ===
-var int[] currentPeriods = array.new<int>(2, -1)  // [year, month]
-var box[] currentBoxes = array.new<box>(2, na)    // [year, month]
+var int[] currentPeriods = array.new<int>(3, -1)  // [year, month, week]
+var box[] currentBoxes = array.new<box>(3, na)    // [year, month, week]
 
 // Session type indices
 YEAR_SESSION = 0
 MONTH_SESSION = 1
+WEEK_SESSION = 2
 
 // Arrays for managing multiple boxes and labels
 var box[] allBoxes = array.new<box>()
@@ -93,6 +100,30 @@ findMonthCycleStart(currentTime) =>
     else
         cycleStartThisMonth
 
+// === WEEK CYCLE LOGIC ===
+
+// Find the most recent occurrence of the configured week start day
+findWeekCycleStart(currentTime) =>
+    // Get current day of week (0=Sunday, 1=Monday, etc.)
+    currentDow = dayofweek(currentTime) - 1
+
+    // Calculate days back to the most recent start day
+    daysBack = (currentDow - week_start_dow + 7) % 7
+
+    // If we're on the start day but before the start time, go back to previous week
+    if daysBack == 0
+        currentHour = hour(currentTime)
+        currentMinute = minute(currentTime)
+        if currentHour < week_start_hour or (currentHour == week_start_hour and currentMinute < week_start_minute)
+            daysBack := 7
+
+    // Calculate the timestamp of the week cycle start
+    msBack = daysBack * 86400000
+    roughStart = currentTime - msBack
+
+    // Adjust to exact start time
+    timestamp(year(roughStart), month(roughStart), dayofmonth(roughStart),
+              week_start_hour, week_start_minute, 0)
 
 // === SESSION CONFIGURATION LAYER ===
 
@@ -114,6 +145,13 @@ getMaxQuarters(config) => math.floor(array.get(config, 2))
 hasGaps(config) => array.get(config, 3) == 1
 getStartOffset(config) => array.get(config, 4)
 
+// === LAYER POSITIONING ===
+layer_height = 30
+base_y = 10
+year_y = base_y                       // Bottom layer
+month_y = base_y + layer_height       // Middle layer
+week_y = base_y + (2 * layer_height)  // Top layer
+
 // === DATA CALCULATION LAYER ===
 
 // Calculate the reference start time for a session
@@ -124,8 +162,11 @@ calculateSessionStart(currentTime, sessionType) =>
     else if sessionType == MONTH_SESSION
         // Month uses configured start day
         findMonthCycleStart(currentTime)
+    else if sessionType == WEEK_SESSION
+        // Week uses configured start day and time
+        findWeekCycleStart(currentTime)
     else
-        // Others use epoch for continuous rotation
+        // Default to epoch
         timestamp(1970, 1, 1, 0, 0, 0)
 
 // Calculate session data without any rendering
@@ -157,12 +198,6 @@ calculateSessionData(currentTime, config) =>
     array.set(result, 1, isActive ? 1 : 0)
     array.set(result, 2, shouldClear ? 1 : 0)
     result
-
-// === LAYER POSITIONING ===
-layer_height = 30
-base_y = 10
-year_y = base_y                       // Bottom layer
-month_y = base_y + layer_height       // Top layer
 
 // === GENERIC SESSION HANDLER ===
 handleSession(sessionType, newPeriod, layerY, sessionColor, labelPrefix, showLabel) =>
@@ -268,6 +303,14 @@ monthConfig = createSessionConfig(
     0            // uses custom start calculation
 )
 
+weekConfig = createSessionConfig(
+    WEEK_SESSION,
+    86400000,    // 1 day (24 hours) per quarter
+    4,           // 4 quarters - daily rotation from configured start day
+    false,       // no gaps - continuous rotation
+    0            // uses custom week cycle start calculation
+)
+
 // === MAIN LOGIC ===
 
 currentTime = time
@@ -275,6 +318,7 @@ currentTime = time
 // Process each session through the declarative pipeline
 processSessionDeclarative(currentTime, yearConfig, year_y, enable_year, "Y-Q")
 processSessionDeclarative(currentTime, monthConfig, month_y, enable_month, "M-Q")
+processSessionDeclarative(currentTime, weekConfig, week_y, enable_week, "W-Q")
 
 // === CLEANUP ===
 while array.size(allBoxes) > 500
@@ -288,11 +332,13 @@ while array.size(allLabels) > 500
         label.delete(oldLabel)
 
 // === VISUAL GUIDES ===
+hline(week_y + layer_height, "Week Top", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
+hline(week_y, "Week Bottom", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
 hline(month_y + layer_height, "Month Top", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
 hline(month_y, "Month Bottom", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
 hline(year_y + layer_height, "Year Top", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
 hline(year_y, "Year Bottom", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
 
 // Plot to maintain scale
-max_y = enable_month ? month_y + layer_height : year_y + layer_height
+max_y = enable_week ? week_y + layer_height : enable_month ? month_y + layer_height : year_y + layer_height
 plot(max_y/2, "", color.new(color.white, 100), display=display.none)

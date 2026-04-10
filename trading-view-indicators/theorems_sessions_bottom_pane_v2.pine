@@ -1,5 +1,5 @@
 //@version=6
-indicator("Theorems Sessions Bottom Pane V2 - Month & Year", "Sessions Timeline", overlay=false, max_boxes_count=500, max_labels_count=500)
+indicator("Theorems Sessions Bottom Pane V2 - Month & Year", "Sessions", overlay=false, max_boxes_count=500, max_labels_count=500)
 
 // === CONFIGURATION ===
 show_labels = input.bool(true, "Show Session Labels", group="Display")
@@ -93,30 +93,70 @@ findMonthCycleStart(currentTime) =>
     else
         cycleStartThisMonth
 
-// Calculate which week (0-3) we're in within the month cycle
-getMonthWeek(currentTime) =>
-    cycleStart = findMonthCycleStart(currentTime)
 
-    // Calculate weeks elapsed since cycle start
-    msElapsed = currentTime - cycleStart
-    weeksElapsed = math.floor(msElapsed / (7 * 86400000))  // 7 days in milliseconds
+// === SESSION CONFIGURATION LAYER ===
 
-    // Return week number (0-3), capped at 3 for week 4+
-    math.min(weeksElapsed, 3)
+// Create a session configuration
+// Returns: [id, quarterDuration, maxQuarters, hasGaps, startOffset]
+createSessionConfig(id, quarterDuration, maxQuarters, hasGaps, startOffset) =>
+    config = array.new<float>(5)
+    array.set(config, 0, id)
+    array.set(config, 1, quarterDuration)
+    array.set(config, 2, maxQuarters)
+    array.set(config, 3, hasGaps ? 1 : 0)
+    array.set(config, 4, startOffset)
+    config
 
-// === YEAR FUNCTIONS ===
+// Getters for clarity
+getSessionId(config) => math.floor(array.get(config, 0))
+getQuarterDuration(config) => array.get(config, 1)
+getMaxQuarters(config) => math.floor(array.get(config, 2))
+hasGaps(config) => array.get(config, 3) == 1
+getStartOffset(config) => array.get(config, 4)
 
-// Get year quarter (0-3) based on month
-getYearQuarter(currentTime) =>
-    m = month(currentTime)
-    if m <= 3
-        0  // Q1: Jan-Mar
-    else if m <= 6
-        1  // Q2: Apr-Jun
-    else if m <= 9
-        2  // Q3: Jul-Sep
+// === DATA CALCULATION LAYER ===
+
+// Calculate the reference start time for a session
+calculateSessionStart(currentTime, sessionType) =>
+    if sessionType == YEAR_SESSION
+        // Year starts at Jan 1
+        timestamp(year(currentTime), 1, 1, 0, 0, 0)
+    else if sessionType == MONTH_SESSION
+        // Month uses configured start day
+        findMonthCycleStart(currentTime)
     else
-        3  // Q4: Oct-Dec
+        // Others use epoch for continuous rotation
+        timestamp(1970, 1, 1, 0, 0, 0)
+
+// Calculate session data without any rendering
+// Returns: [quarterIndex, isActive, shouldClearBox]
+calculateSessionData(currentTime, config) =>
+    sessionId = getSessionId(config)
+    quarterDuration = getQuarterDuration(config)
+    maxQuarters = getMaxQuarters(config)
+    hasGaps = hasGaps(config)
+
+    // Get start reference
+    startTime = calculateSessionStart(currentTime, sessionId)
+
+    // Calculate elapsed time
+    timeElapsed = currentTime - startTime
+    periodsElapsed = math.floor(timeElapsed / quarterDuration)
+
+    // Determine if session is active
+    isActive = not hasGaps or periodsElapsed < maxQuarters
+
+    // Calculate quarter (0-3)
+    quarterIndex = periodsElapsed % maxQuarters
+
+    // Should clear box (for gaps)
+    shouldClear = hasGaps and periodsElapsed >= maxQuarters
+
+    result = array.new<int>(3)
+    array.set(result, 0, quarterIndex)
+    array.set(result, 1, isActive ? 1 : 0)
+    array.set(result, 2, shouldClear ? 1 : 0)
+    result
 
 // === LAYER POSITIONING ===
 layer_height = 30
@@ -170,30 +210,71 @@ handleSession(sessionType, newPeriod, layerY, sessionColor, labelPrefix, showLab
         if not na(currentBox)
             box.set_right(currentBox, bar_index + 1)
 
+// === RENDERING LAYER ===
+
+// Render a session based on calculated data
+renderSession(sessionType, quarterIndex, isActive, shouldClear, layerY, labelPrefix) =>
+    if shouldClear
+        // Clear box during gap period
+        currentBox = array.get(currentBoxes, sessionType)
+        if not na(currentBox)
+            array.set(currentBoxes, sessionType, na)
+    else if isActive
+
+        // Draw the session using existing handler
+        handleSession(
+            sessionType,
+            quarterIndex,
+            layerY,
+            getQuarterColor(quarterIndex),
+            labelPrefix,
+            show_labels
+        )
+
+// === SESSION PROCESSOR ===
+
+// Process a session from config to render
+processSessionDeclarative(currentTime, config, layerY, enabled, labelPrefix) =>
+    if not enabled
+        na
+    else
+
+        // Step 1: Calculate data
+        sessionData = calculateSessionData(currentTime, config)
+        quarterIndex = array.get(sessionData, 0)
+        isActive = array.get(sessionData, 1) == 1
+        shouldClear = array.get(sessionData, 2) == 1
+
+        // Step 2: Render based on data
+        sessionId = getSessionId(config)
+        renderSession(sessionId, quarterIndex, isActive, shouldClear, layerY, labelPrefix)
+
+// === SESSION CONFIGURATIONS ===
+
+// Define all sessions declaratively
+yearConfig = createSessionConfig(
+    YEAR_SESSION,
+    7889400000,  // ~3 months (91.25 days) per quarter
+    4,           // 4 quarters
+    false,       // no gaps
+    0            // start offset
+)
+
+monthConfig = createSessionConfig(
+    MONTH_SESSION,
+    604800000,   // 1 week (7 days) per quarter
+    4,           // 4 quarters
+    true,        // has gaps after week 4
+    0            // uses custom start calculation
+)
+
 // === MAIN LOGIC ===
 
 currentTime = time
 
-// Calculate current sessions
-newYearQuarter = getYearQuarter(currentTime)
-newMonthWeek = getMonthWeek(currentTime)
-
-// === YEAR SESSION HANDLING ===
-if enable_year
-    handleSession(YEAR_SESSION, newYearQuarter, year_y, getQuarterColor(newYearQuarter), "Y-Q", true)
-
-// === MONTH SESSION HANDLING ===
-if enable_month
-    cycleStart = findMonthCycleStart(currentTime)
-    weeksElapsed = math.floor((currentTime - cycleStart) / (7 * 86400000))
-
-    if weeksElapsed < 4
-        handleSession(MONTH_SESSION, newMonthWeek, month_y, getQuarterColor(newMonthWeek), "M-Q", true)
-    else
-        // Clear the box reference during gap period
-        currentBox = array.get(currentBoxes, MONTH_SESSION)
-        if not na(currentBox)
-            array.set(currentBoxes, MONTH_SESSION, na)
+// Process each session through the declarative pipeline
+processSessionDeclarative(currentTime, yearConfig, year_y, enable_year, "Y-Q")
+processSessionDeclarative(currentTime, monthConfig, month_y, enable_month, "M-Q")
 
 // === CLEANUP ===
 while array.size(allBoxes) > 500

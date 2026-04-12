@@ -1,14 +1,17 @@
 //@version=6
-indicator("Theorems Sessions Bottom Pane V2 - Week, Month & Year", "Sessions", overlay=false, max_boxes_count=500, max_labels_count=500)
+indicator("Theorems Sessions Bottom Pane V2 - All Timeframes", "Sessions", overlay=false, max_boxes_count=500, max_labels_count=500)
 
 // === CONFIGURATION ===
 show_labels = input.bool(true, "Show Session Labels", group="Display")
 label_size = input.string("small", "Label Size", options=["tiny", "small", "normal"], group="Display")
 
-// Layer enables
-enable_year = input.bool(true, "Enable Year Sessions", group="Layers")
-enable_month = input.bool(true, "Enable Month Sessions", group="Layers")
-enable_week = input.bool(true, "Enable Week Sessions", group="Layers")
+// Timeframe visibility settings (comma-separated list of timeframes)
+year_timeframes = input.string("H4,H1", "Year Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
+month_timeframes = input.string("H4,H1,M45", "Month Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
+week_timeframes = input.string("H4,H1,M45", "Week Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
+day_timeframes = input.string("M45,M15,M1", "Day Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
+min90_timeframes = input.string("M15,M1", "90-Min Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
+min22_5_timeframes = input.string("M1", "22.5-Min Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
 
 // Universal Quarter Colors
 q1_color = input.color(color.new(color.gray, 80), "Quarter 1 Color", group="Colors")
@@ -27,13 +30,16 @@ week_start_hour = input.int(0, "Week Cycle Start Hour", minval=0, maxval=23, gro
 week_start_minute = input.int(0, "Week Cycle Start Minute", minval=0, maxval=59, group="Week Cycle")
 
 // === STATE VARIABLES ===
-var int[] currentPeriods = array.new<int>(3, -1)  // [year, month, week]
-var box[] currentBoxes = array.new<box>(3, na)    // [year, month, week]
+var int[] currentPeriods = array.new<int>(6, -1)  // [year, month, week, day, 90min, 22.5min]
+var box[] currentBoxes = array.new<box>(6, na)    // [year, month, week, day, 90min, 22.5min]
 
 // Session type indices
 YEAR_SESSION = 0
 MONTH_SESSION = 1
 WEEK_SESSION = 2
+DAY_SESSION = 3
+MIN90_SESSION = 4
+MIN22_5_SESSION = 5
 
 // Arrays for managing multiple boxes and labels
 var box[] allBoxes = array.new<box>()
@@ -47,9 +53,57 @@ getBorderColor() =>
 getTextColor() =>
     color.white
 
+// === TIMEFRAME VISIBILITY FUNCTIONS ===
+
+// Remove all spaces from a string
+stripSpaces(str) =>
+    result = ""
+    for i = 0 to str.length(str) - 1
+        char = str.substring(str, i, i + 1)
+        if char != " "
+            result := result + char
+    result
+
+// Get current timeframe as a string (M1, M5, H1, etc.)
+getCurrentTimeframeString() =>
+    tf = timeframe.period
+
+    // Handle specific timeframes first
+    if tf == "D"
+        "D1"
+    else if tf == "W"
+        "W1"
+    else if tf == "M"
+        "MN1"
+    else
+        // Try to parse as number
+        tfNum = str.tonumber(tf)
+        if not na(tfNum)
+            // Handle hour timeframes (60 = H1, 240 = H4, etc.)
+            if tfNum >= 60
+                hours = math.floor(tfNum / 60)
+                "H" + str.tostring(hours)
+            // Handle minute timeframes (1, 5, 15, 30, 45)
+            else
+                "M" + str.tostring(tfNum)
+        else
+            // Return as-is if can't parse
+            tf
+
+// Check if current timeframe is in the provided list
+isTimeframeVisible(timeframeList) =>
+    // Strip all spaces from the input
+    cleanList = stripSpaces(timeframeList)
+    currentTF = getCurrentTimeframeString()
+
+    // Check if current timeframe is in the list
+    str.contains(cleanList, currentTF)
+
 // Get color for any quarter (unified)
 getQuarterColor(quarterNum) =>
-    switch quarterNum
+    // Use modulo 4 to cycle through colors for sessions with more than 4 quarters
+    colorIndex = quarterNum % 4
+    switch colorIndex
         0 => q1_color
         1 => q2_color
         2 => q3_color
@@ -63,6 +117,22 @@ getYearLabel(quarterNum) =>
 // Get month label text
 getMonthLabel(weekNum) =>
     "M-Q" + str.tostring(weekNum + 1)
+
+// Get day label text
+getDayLabel(quarterNum) =>
+    "D-Q" + str.tostring(quarterNum + 1)
+
+// Get 90-minute label text
+get90MinLabel(segmentNum) =>
+    // Cycle through Q1-Q4 for 90-minute segments
+    quarterNum = segmentNum % 4
+    "90M-Q" + str.tostring(quarterNum + 1)
+
+// Get 22.5-minute label text
+get22_5MinLabel(quarterNum) =>
+    // Cycle through Q1-Q4 for 22.5-minute quarters
+    quarterLabel = quarterNum % 4
+    "22.5M-Q" + str.tostring(quarterLabel + 1)
 
 // === MONTH CYCLE LOGIC ===
 
@@ -148,9 +218,39 @@ getStartOffset(config) => array.get(config, 4)
 // === LAYER POSITIONING ===
 layer_height = 30
 base_y = 10
-year_y = base_y                       // Bottom layer
-month_y = base_y + layer_height       // Middle layer
-week_y = base_y + (2 * layer_height)  // Top layer
+
+// Check visibility for each session type
+year_visible = isTimeframeVisible(year_timeframes)
+month_visible = isTimeframeVisible(month_timeframes)
+week_visible = isTimeframeVisible(week_timeframes)
+day_visible = isTimeframeVisible(day_timeframes)
+min90_visible = isTimeframeVisible(min90_timeframes)
+min22_5_visible = isTimeframeVisible(min22_5_timeframes)
+
+// Calculate dynamic Y positions (stack visible layers with no gaps)
+current_y = base_y
+
+// Stack layers from bottom to top based on visibility
+year_y = year_visible ? current_y : na
+current_y := year_visible ? current_y + layer_height : current_y
+
+month_y = month_visible ? current_y : na
+current_y := month_visible ? current_y + layer_height : current_y
+
+week_y = week_visible ? current_y : na
+current_y := week_visible ? current_y + layer_height : current_y
+
+day_y = day_visible ? current_y : na
+current_y := day_visible ? current_y + layer_height : current_y
+
+min90_y = min90_visible ? current_y : na
+current_y := min90_visible ? current_y + layer_height : current_y
+
+min22_5_y = min22_5_visible ? current_y : na
+current_y := min22_5_visible ? current_y + layer_height : current_y
+
+// Max Y position for scaling
+max_y_position = current_y
 
 // === DATA CALCULATION LAYER ===
 
@@ -165,6 +265,15 @@ calculateSessionStart(currentTime, sessionType) =>
     else if sessionType == WEEK_SESSION
         // Week uses configured start day and time
         findWeekCycleStart(currentTime)
+    else if sessionType == DAY_SESSION
+        // Day starts at midnight
+        timestamp(year(currentTime), month(currentTime), dayofmonth(currentTime), 0, 0, 0)
+    else if sessionType == MIN90_SESSION
+        // 90-minute cycles start at midnight
+        timestamp(year(currentTime), month(currentTime), dayofmonth(currentTime), 0, 0, 0)
+    else if sessionType == MIN22_5_SESSION
+        // 22.5-minute cycles start at midnight
+        timestamp(year(currentTime), month(currentTime), dayofmonth(currentTime), 0, 0, 0)
     else
         // Default to epoch
         timestamp(1970, 1, 1, 0, 0, 0)
@@ -306,19 +415,57 @@ monthConfig = createSessionConfig(
 weekConfig = createSessionConfig(
     WEEK_SESSION,
     86400000,    // 1 day (24 hours) per quarter
-    4,           // 4 quarters - daily rotation from configured start day
-    false,       // no gaps - continuous rotation
+    4,           // 4 quarters (4 days)
+    true,        // has gaps after day 4
     0            // uses custom week cycle start calculation
+)
+
+dayConfig = createSessionConfig(
+    DAY_SESSION,
+    21600000,    // 6 hours per quarter
+    4,           // 4 quarters (00:00-06:00, 06:00-12:00, 12:00-18:00, 18:00-00:00)
+    false,       // no gaps - continuous
+    0            // starts at midnight
+)
+
+min90Config = createSessionConfig(
+    MIN90_SESSION,
+    5400000,     // 90 minutes per segment
+    4,           // 4 quarters cycling (Q1-Q4 repeating)
+    false,       // no gaps - continuous
+    0            // starts at midnight
+)
+
+min22_5Config = createSessionConfig(
+    MIN22_5_SESSION,
+    1350000,     // 22.5 minutes per quarter
+    4,           // 4 quarters cycling (Q1-Q4 repeating)
+    false,       // no gaps - continuous
+    0            // starts at midnight
 )
 
 // === MAIN LOGIC ===
 
 currentTime = time
 
-// Process each session through the declarative pipeline
-processSessionDeclarative(currentTime, yearConfig, year_y, enable_year, "Y-Q")
-processSessionDeclarative(currentTime, monthConfig, month_y, enable_month, "M-Q")
-processSessionDeclarative(currentTime, weekConfig, week_y, enable_week, "W-Q")
+// Process each session through the declarative pipeline (only if visible)
+if year_visible
+    processSessionDeclarative(currentTime, yearConfig, year_y, true, "Y-Q")
+
+if month_visible
+    processSessionDeclarative(currentTime, monthConfig, month_y, true, "M-Q")
+
+if week_visible
+    processSessionDeclarative(currentTime, weekConfig, week_y, true, "W-Q")
+
+if day_visible
+    processSessionDeclarative(currentTime, dayConfig, day_y, true, "D-Q")
+
+if min90_visible
+    processSessionDeclarative(currentTime, min90Config, min90_y, true, "90M-Q")
+
+if min22_5_visible
+    processSessionDeclarative(currentTime, min22_5Config, min22_5_y, true, "22.5M-Q")
 
 // === CLEANUP ===
 while array.size(allBoxes) > 500
@@ -332,13 +479,8 @@ while array.size(allLabels) > 500
         label.delete(oldLabel)
 
 // === VISUAL GUIDES ===
-hline(week_y + layer_height, "Week Top", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
-hline(week_y, "Week Bottom", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
-hline(month_y + layer_height, "Month Top", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
-hline(month_y, "Month Bottom", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
-hline(year_y + layer_height, "Year Top", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
-hline(year_y, "Year Bottom", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
+// Since hlines require constants, we'll skip them for dynamic layouts
+// The boxes themselves provide sufficient visual boundaries
 
-// Plot to maintain scale
-max_y = enable_week ? week_y + layer_height : enable_month ? month_y + layer_height : year_y + layer_height
-plot(max_y/2, "", color.new(color.white, 100), display=display.none)
+// Plot to maintain scale (use calculated max_y_position)
+plot(max_y_position/2, "", color.new(color.white, 100), display=display.none)

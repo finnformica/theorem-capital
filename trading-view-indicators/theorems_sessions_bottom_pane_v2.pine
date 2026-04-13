@@ -5,13 +5,18 @@ indicator("Theorems Sessions Bottom Pane V2 - All Timeframes", "Sessions", overl
 show_labels = input.bool(true, "Show Session Labels", group="Display")
 label_size = input.string("small", "Label Size", options=["tiny", "small", "normal"], group="Display")
 
+// Master timing configuration - all cycles inherit from this single point
+master_start_dow = input.int(2, "Master Start Day of Week", minval=0, maxval=6, group="Master Timing", tooltip="0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday")
+master_start_hour = input.int(21, "Master Start Hour", minval=0, maxval=23, group="Master Timing", tooltip="Hour in 24h format (0-23)")
+master_start_minute = input.int(15, "Master Start Minute", minval=0, maxval=59, group="Master Timing")
+
 // Timeframe visibility settings (comma-separated list of timeframes)
 year_timeframes = input.string("H4,H1", "Year Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
-month_timeframes = input.string("H4,H1,M45", "Month Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
-week_timeframes = input.string("H4,H1,M45", "Week Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
-day_timeframes = input.string("M45,M15,M1", "Day Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
-min90_timeframes = input.string("M15,M1", "90-Min Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
-min22_5_timeframes = input.string("M1", "22.5-Min Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
+month_timeframes = input.string("H4,H1", "Month Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
+week_timeframes = input.string("H4,H1,M15", "Week Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
+day_timeframes = input.string("M15,M5,M1", "Day Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
+hour6_timeframes = input.string("M5,M1", "6-Hour Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
+min90_timeframes = input.string("M1", "90-Min Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
 
 // Universal Quarter Colors
 q1_color = input.color(color.new(color.gray, 80), "Quarter 1 Color", group="Colors")
@@ -19,27 +24,19 @@ q2_color = input.color(color.new(color.red, 80), "Quarter 2 Color", group="Color
 q3_color = input.color(color.new(color.green, 80), "Quarter 3 Color", group="Colors")
 q4_color = input.color(color.new(color.blue, 80), "Quarter 4 Color", group="Colors")
 
-// Month Cycle Settings
-month_start_dow = input.int(2, "Month Cycle Start DOW", minval=0, maxval=6, group="Month Cycle", tooltip="0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday")
-month_start_hour = input.int(0, "Month Cycle Start Hour", minval=0, maxval=23, group="Month Cycle")
-month_start_minute = input.int(0, "Month Cycle Start Minute", minval=0, maxval=59, group="Month Cycle")
-
-// Week Cycle Settings
-week_start_dow = input.int(1, "Week Cycle Start DOW", minval=0, maxval=6, group="Week Cycle", tooltip="0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday")
-week_start_hour = input.int(0, "Week Cycle Start Hour", minval=0, maxval=23, group="Week Cycle")
-week_start_minute = input.int(0, "Week Cycle Start Minute", minval=0, maxval=59, group="Week Cycle")
+// Removed separate cycle settings - now using master timing configuration
 
 // === STATE VARIABLES ===
-var int[] currentPeriods = array.new<int>(6, -1)  // [year, month, week, day, 90min, 22.5min]
-var box[] currentBoxes = array.new<box>(6, na)    // [year, month, week, day, 90min, 22.5min]
+var int[] currentPeriods = array.new<int>(6, -1)  // [year, month, week, day, 6hour, 90min]
+var box[] currentBoxes = array.new<box>(6, na)    // [year, month, week, day, 6hour, 90min]
 
 // Session type indices
 YEAR_SESSION = 0
 MONTH_SESSION = 1
 WEEK_SESSION = 2
 DAY_SESSION = 3
-MIN90_SESSION = 4
-MIN22_5_SESSION = 5
+HOUR6_SESSION = 4
+MIN90_SESSION = 5
 
 // Arrays for managing multiple boxes and labels
 var box[] allBoxes = array.new<box>()
@@ -122,6 +119,10 @@ getMonthLabel(weekNum) =>
 getDayLabel(quarterNum) =>
     "D-Q" + str.tostring(quarterNum + 1)
 
+// Get 6-hour label text
+get6HourLabel(quarterNum) =>
+    "6H-Q" + str.tostring(quarterNum + 1)
+
 // Get 90-minute label text
 get90MinLabel(segmentNum) =>
     // Cycle through Q1-Q4 for 90-minute segments
@@ -136,21 +137,21 @@ get22_5MinLabel(quarterNum) =>
 
 // === MONTH CYCLE LOGIC ===
 
-// Find the first occurrence of target DOW in the current or previous month
+// Find the first occurrence of master DOW in the current or previous month
 findMonthCycleStart(currentTime) =>
     // Get current date components
     y = year(currentTime)
     m = month(currentTime)
     d = dayofmonth(currentTime)
 
-    // Find first occurrence of target DOW in current month
-    firstOfMonth = timestamp(y, m, 1, month_start_hour, month_start_minute, 0)
+    // Find first occurrence of master DOW in current month
+    firstOfMonth = timestamp(y, m, 1, master_start_hour, master_start_minute, 0)
     firstDow = dayofweek(firstOfMonth) - 1  // Convert to 0=Sunday format
 
-    // Calculate days to add to get to target DOW
-    daysToAdd = month_start_dow == firstDow ? 0 : (month_start_dow - firstDow + 7) % 7
+    // Calculate days to add to get to master DOW
+    daysToAdd = master_start_dow == firstDow ? 0 : (master_start_dow - firstDow + 7) % 7
 
-    // First occurrence of target DOW in current month
+    // First occurrence of master DOW in current month
     cycleStartThisMonth = firstOfMonth + (daysToAdd * 86400000)
 
     // If we're before the cycle start for this month, use previous month's cycle
@@ -162,9 +163,9 @@ findMonthCycleStart(currentTime) =>
             prevM := 12
             prevY := y - 1
 
-        firstOfPrevMonth = timestamp(prevY, prevM, 1, month_start_hour, month_start_minute, 0)
+        firstOfPrevMonth = timestamp(prevY, prevM, 1, master_start_hour, master_start_minute, 0)
         firstDowPrev = dayofweek(firstOfPrevMonth) - 1
-        daysToAddPrev = month_start_dow == firstDowPrev ? 0 : (month_start_dow - firstDowPrev + 7) % 7
+        daysToAddPrev = master_start_dow == firstDowPrev ? 0 : (master_start_dow - firstDowPrev + 7) % 7
         cycleStartPrevMonth = firstOfPrevMonth + (daysToAddPrev * 86400000)
         cycleStartPrevMonth
     else
@@ -172,19 +173,19 @@ findMonthCycleStart(currentTime) =>
 
 // === WEEK CYCLE LOGIC ===
 
-// Find the most recent occurrence of the configured week start day
+// Find the most recent occurrence of master week start day
 findWeekCycleStart(currentTime) =>
     // Get current day of week (0=Sunday, 1=Monday, etc.)
     currentDow = dayofweek(currentTime) - 1
 
-    // Calculate days back to the most recent start day
-    daysBack = (currentDow - week_start_dow + 7) % 7
+    // Calculate days back to the most recent master start day
+    daysBack = (currentDow - master_start_dow + 7) % 7
 
     // If we're on the start day but before the start time, go back to previous week
     if daysBack == 0
         currentHour = hour(currentTime)
         currentMinute = minute(currentTime)
-        if currentHour < week_start_hour or (currentHour == week_start_hour and currentMinute < week_start_minute)
+        if currentHour < master_start_hour or (currentHour == master_start_hour and currentMinute < master_start_minute)
             daysBack := 7
 
     // Calculate the timestamp of the week cycle start
@@ -193,7 +194,7 @@ findWeekCycleStart(currentTime) =>
 
     // Adjust to exact start time
     timestamp(year(roughStart), month(roughStart), dayofmonth(roughStart),
-              week_start_hour, week_start_minute, 0)
+              master_start_hour, master_start_minute, 0)
 
 // === SESSION CONFIGURATION LAYER ===
 
@@ -224,8 +225,8 @@ year_visible = isTimeframeVisible(year_timeframes)
 month_visible = isTimeframeVisible(month_timeframes)
 week_visible = isTimeframeVisible(week_timeframes)
 day_visible = isTimeframeVisible(day_timeframes)
+hour6_visible = isTimeframeVisible(hour6_timeframes)
 min90_visible = isTimeframeVisible(min90_timeframes)
-min22_5_visible = isTimeframeVisible(min22_5_timeframes)
 
 // Calculate dynamic Y positions (stack visible layers with no gaps)
 current_y = base_y
@@ -243,11 +244,11 @@ current_y := week_visible ? current_y + layer_height : current_y
 day_y = day_visible ? current_y : na
 current_y := day_visible ? current_y + layer_height : current_y
 
+hour6_y = hour6_visible ? current_y : na
+current_y := hour6_visible ? current_y + layer_height : current_y
+
 min90_y = min90_visible ? current_y : na
 current_y := min90_visible ? current_y + layer_height : current_y
-
-min22_5_y = min22_5_visible ? current_y : na
-current_y := min22_5_visible ? current_y + layer_height : current_y
 
 // Max Y position for scaling
 max_y_position = current_y
@@ -260,20 +261,50 @@ calculateSessionStart(currentTime, sessionType) =>
         // Year starts at Jan 1
         timestamp(year(currentTime), 1, 1, 0, 0, 0)
     else if sessionType == MONTH_SESSION
-        // Month uses configured start day
+        // Month uses master start day
         findMonthCycleStart(currentTime)
     else if sessionType == WEEK_SESSION
-        // Week uses configured start day and time
+        // Week uses master start day and time
         findWeekCycleStart(currentTime)
     else if sessionType == DAY_SESSION
-        // Day starts at midnight
-        timestamp(year(currentTime), month(currentTime), dayofmonth(currentTime), 0, 0, 0)
+        // Day starts at master hour:minute
+        todayStart = timestamp(year(currentTime), month(currentTime), dayofmonth(currentTime), master_start_hour, master_start_minute, 0)
+
+        // If current time is before today's start, use yesterday's start
+        if currentTime < todayStart
+            todayStart - 86400000  // Go back 24 hours
+        else
+            todayStart
+    else if sessionType == HOUR6_SESSION
+        // 6-hour cycles aligned to master time
+        // First, find today's master start time
+        todayStart = timestamp(year(currentTime), month(currentTime), dayofmonth(currentTime), master_start_hour, master_start_minute, 0)
+
+        // If current time is before today's start, use yesterday's start
+        if currentTime < todayStart
+            todayStart := todayStart - 86400000  // Go back 24 hours
+
+        // Calculate which 6-hour period we're in (0-3)
+        timeSinceStart = currentTime - todayStart
+        sixHourPeriod = math.floor(timeSinceStart / 21600000) % 4
+
+        // Return the start of current 6-hour period
+        todayStart + (sixHourPeriod * 21600000)
     else if sessionType == MIN90_SESSION
-        // 90-minute cycles start at midnight
-        timestamp(year(currentTime), month(currentTime), dayofmonth(currentTime), 0, 0, 0)
-    else if sessionType == MIN22_5_SESSION
-        // 22.5-minute cycles start at midnight
-        timestamp(year(currentTime), month(currentTime), dayofmonth(currentTime), 0, 0, 0)
+        // 90-minute cycles aligned to master time
+        // First, find today's master start time
+        todayStart = timestamp(year(currentTime), month(currentTime), dayofmonth(currentTime), master_start_hour, master_start_minute, 0)
+
+        // If current time is before today's start, use yesterday's start
+        if currentTime < todayStart
+            todayStart := todayStart - 86400000  // Go back 24 hours
+
+        // Calculate which 90-minute period we're in
+        timeSinceStart = currentTime - todayStart
+        ninetyMinPeriod = math.floor(timeSinceStart / 5400000)
+
+        // Return the start of current 90-minute period
+        todayStart + (ninetyMinPeriod * 5400000)
     else
         // Default to epoch
         timestamp(1970, 1, 1, 0, 0, 0)
@@ -335,10 +366,12 @@ handleSession(sessionType, newPeriod, layerY, sessionColor, labelPrefix, showLab
 
         // Add label if enabled
         if showLabel and show_labels
+            // Use modulo 4 for proper quarter labeling (Q1-Q4)
+            quarterLabel = (newPeriod % 4) + 1
             lbl = label.new(
                 x=bar_index,
                 y=layerY + layer_height/2,
-                text=labelPrefix + str.tostring(newPeriod + 1),
+                text=labelPrefix + str.tostring(quarterLabel),
                 style=label.style_label_left,
                 color=color.new(color.black, 100),
                 textcolor=getTextColor(),
@@ -398,7 +431,7 @@ processSessionDeclarative(currentTime, config, layerY, enabled, labelPrefix) =>
 // Define all sessions declaratively
 yearConfig = createSessionConfig(
     YEAR_SESSION,
-    7889400000,  // ~3 months (91.25 days) per quarter
+    91.25 * 24 * 60 * 60 * 1000,  // 91.25 days per quarter (3 months)
     4,           // 4 quarters
     false,       // no gaps
     0            // start offset
@@ -406,7 +439,7 @@ yearConfig = createSessionConfig(
 
 monthConfig = createSessionConfig(
     MONTH_SESSION,
-    604800000,   // 1 week (7 days) per quarter
+    7 * 24 * 60 * 60 * 1000,   // 7 days (1 week) per quarter
     4,           // 4 quarters
     true,        // has gaps after week 4
     0            // uses custom start calculation
@@ -414,34 +447,34 @@ monthConfig = createSessionConfig(
 
 weekConfig = createSessionConfig(
     WEEK_SESSION,
-    86400000,    // 1 day (24 hours) per quarter
-    4,           // 4 quarters (4 days)
-    true,        // has gaps after day 4
+    30 * 60 * 60 * 1000,    // 30 hours per quarter
+    4,           // 4 quarters (120 hours total = 5 days)
+    true,        // has gaps after 4th quarter until next Tuesday
     0            // uses custom week cycle start calculation
 )
 
 dayConfig = createSessionConfig(
     DAY_SESSION,
-    21600000,    // 6 hours per quarter
-    4,           // 4 quarters (00:00-06:00, 06:00-12:00, 12:00-18:00, 18:00-00:00)
+    6 * 60 * 60 * 1000,    // 6 hours per quarter
+    4,           // 4 quarters
     false,       // no gaps - continuous
-    0            // starts at midnight
+    0            // starts at master time
+)
+
+hour6Config = createSessionConfig(
+    HOUR6_SESSION,
+    90 * 60 * 1000,     // 90 minutes per quarter
+    4,           // 4 quarters cycling
+    false,       // no gaps - continuous
+    0            // aligned to master time
 )
 
 min90Config = createSessionConfig(
     MIN90_SESSION,
-    5400000,     // 90 minutes per segment
+    22.5 * 60 * 1000,     // 22.5 minutes per quarter
     4,           // 4 quarters cycling (Q1-Q4 repeating)
     false,       // no gaps - continuous
-    0            // starts at midnight
-)
-
-min22_5Config = createSessionConfig(
-    MIN22_5_SESSION,
-    1350000,     // 22.5 minutes per quarter
-    4,           // 4 quarters cycling (Q1-Q4 repeating)
-    false,       // no gaps - continuous
-    0            // starts at midnight
+    0            // aligned to master time
 )
 
 // === MAIN LOGIC ===
@@ -461,11 +494,11 @@ if week_visible
 if day_visible
     processSessionDeclarative(currentTime, dayConfig, day_y, true, "D-Q")
 
+if hour6_visible
+    processSessionDeclarative(currentTime, hour6Config, hour6_y, true, "6H-Q")
+
 if min90_visible
     processSessionDeclarative(currentTime, min90Config, min90_y, true, "90M-Q")
-
-if min22_5_visible
-    processSessionDeclarative(currentTime, min22_5Config, min22_5_y, true, "22.5M-Q")
 
 // === CLEANUP ===
 while array.size(allBoxes) > 500

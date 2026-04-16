@@ -36,7 +36,7 @@ MIN90_SESSION = 5
 MS_PER_MINUTE = 60 * 1000
 CYCLE_90M_MS  = 90 * MS_PER_MINUTE
 CYCLE_6H_MS   = 6 * 60 * MS_PER_MINUTE
-MAX_VISIBLE_CYCLES = 50
+CYCLE_DAY_MS  = 24 * 60 * MS_PER_MINUTE
 
 // === GENERIC HELPERS ===
 
@@ -91,7 +91,9 @@ f_label_size() =>
     label_size == "tiny" ? size.tiny : label_size == "normal" ? size.normal : size.small
 
 // === GENERIC RENDERER ===
-f_render_cycle(cycle_ms, y_bot, y_top, tf_list, label_prefix, boxes_arr, labels_arr) =>
+// max_cycles: how many cycles back from the current one to render. Budget matters:
+// (sum of max_cycles across all call sites) * 4 must stay under `max_boxes_count`.
+f_render_cycle(cycle_ms, y_bot, y_top, tf_list, label_prefix, max_cycles, boxes_arr, labels_arr) =>
     if barstate.islast and f_tf_enabled(tf_list) and not na(anchor)
         while array.size(boxes_arr) > 0
             box.delete(array.shift(boxes_arr))
@@ -100,7 +102,7 @@ f_render_cycle(cycle_ms, y_bot, y_top, tf_list, label_prefix, boxes_arr, labels_
 
         quarter_ms = math.floor(cycle_ms / 4.0)
         [current_cycle_start, _q] = f_cycle_math(time, anchor, cycle_ms)
-        render_start = current_cycle_start - MAX_VISIBLE_CYCLES * cycle_ms
+        render_start = current_cycle_start - max_cycles * cycle_ms
 
         cycle_start = render_start
         while cycle_start <= current_cycle_start + cycle_ms
@@ -116,17 +118,23 @@ f_render_cycle(cycle_ms, y_bot, y_top, tf_list, label_prefix, boxes_arr, labels_
 
 // === ORCHESTRATION ===
 // Layout: smaller cycles stack on TOP, larger on BOTTOM. Each new (larger) cycle
-// added in future steps slots in below, starting from y=0 downward (negative).
+// added in future steps slots in below, with decreasing y. Per-cycle max_cycles
+// is tuned so (sum × 4) stays under max_boxes_count=500.
 //
-// Step 2: 6-hour cycle → row below 90m (y ∈ [0, 1])
+// Step 3: Daily cycle → row below 6H (y ∈ [-1, 0]); quarter = 6H, aligns with 6H starts
+var array<box>   boxes_day  = array.new<box>()
+var array<label> labels_day = array.new<label>()
+f_render_cycle(CYCLE_DAY_MS, -1.0, 0.0, day_timeframes, "D ", 10, boxes_day, labels_day)
+
+// Step 2: 6-hour cycle → middle (y ∈ [0, 1]); quarter = 90min, aligns with 90M starts
 var array<box>   boxes_6h  = array.new<box>()
 var array<label> labels_6h = array.new<label>()
-f_render_cycle(CYCLE_6H_MS, 0.0, 1.0, hour6_timeframes, "6H ", boxes_6h, labels_6h)
+f_render_cycle(CYCLE_6H_MS, 0.0, 1.0, hour6_timeframes, "6H ", 20, boxes_6h, labels_6h)
 
-// Step 1: 90min cycle → top row (y ∈ [1, 2]); quarter = 22.5min, aligns with 6H boundaries
+// Step 1: 90min cycle → top row (y ∈ [1, 2]); quarter = 22.5min
 var array<box>   boxes_90m  = array.new<box>()
 var array<label> labels_90m = array.new<label>()
-f_render_cycle(CYCLE_90M_MS, 1.0, 2.0, min90_timeframes, "90M ", boxes_90m, labels_90m)
+f_render_cycle(CYCLE_90M_MS, 1.0, 2.0, min90_timeframes, "90M ", 50, boxes_90m, labels_90m)
 
 // Plot to maintain pane scale (invisible; boxes drive the visible y-range)
-plot(1.0, "", color.new(color.white, 100), display=display.none)
+plot(0.5, "", color.new(color.white, 100), display=display.none)

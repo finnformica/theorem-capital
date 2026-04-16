@@ -24,8 +24,8 @@ This directory contains Pine Script indicators for TradingView, specifically foc
 - ✅ Improved array management and cleanup
 - ✅ Enhanced bar indexing logic to prevent errors
 
-**Quarterly Cycles (Steps 1 & 2 — 90min + 6hour)**:
-Added generic cycle-based renderer anchored to master DOW + hour + minute. Anchor is computed *synthetically* via `timestamp()` from any bar's date (no dependency on a real bar landing at the master time — avoids data-gap symbols). Helpers: `f_tf_enabled`, `f_cycle_math` (pure cycle_start + quarter_idx math), `f_quarter_color`, `f_render_cycle` (full repaint on `barstate.islast`, `MAX_VISIBLE_CYCLES=50`, respects `max_boxes_count=500`). Rows stack smallest-on-top: 6hour at y∈[0,1] (bottom), 90min at y∈[1,2] (top). Future larger cycles (daily, weekly, monthly, yearly) will slot in below with decreasing y. Tests: `tests/test_quarterly_cycles.py`.
+**Quarterly Cycles (Steps 1–3 — 90min + 6hour + daily)**:
+Added generic cycle-based renderer anchored to master DOW + hour + minute. Anchor is computed *synthetically* via `timestamp()` from any bar's date (no dependency on a real bar landing at the master time — avoids data-gap symbols). Helpers: `f_tf_enabled`, `f_cycle_math` (pure cycle_start + quarter_idx math), `f_quarter_color`, `f_render_cycle(cycle_ms, y_bot, y_top, tf_list, label_prefix, max_cycles, boxes_arr, labels_arr)` (full repaint on `barstate.islast`; `max_cycles` is per-call so the total box budget stays under `max_boxes_count=500`). Rows stack smallest-on-top: daily at y∈[−1,0], 6hour at y∈[0,1], 90min at y∈[1,2]. Each level's Q-boundaries coincide with the cycle-start of the level above (verified by `test_*_aligns_with_*` in tests). Tests: `tests/test_quarterly_cycles.py`.
 
 ## Testing Infrastructure
 

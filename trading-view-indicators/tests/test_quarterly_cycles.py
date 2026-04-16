@@ -11,6 +11,8 @@ CYCLE_90M_MS = 90 * 60 * 1000
 QUARTER_90M_MS = CYCLE_90M_MS // 4  # 1,350,000 ms = 22.5 min
 CYCLE_6H_MS = 6 * 60 * 60 * 1000
 QUARTER_6H_MS = CYCLE_6H_MS // 4    # 5,400,000 ms = 90 min
+CYCLE_DAY_MS = 24 * 60 * 60 * 1000
+QUARTER_DAY_MS = CYCLE_DAY_MS // 4  # 21,600,000 ms = 6 hours
 
 
 def cycle_math(t_ms, anchor_ms, cycle_ms):
@@ -133,6 +135,51 @@ class QuarterlyCyclesValidator:
                 all_passed = False
         return all_passed
 
+    def test_day_quarter_alignment(self):
+        """Daily cycle: 4 quarters × 6 hours. Each boundary lands on a 6H cycle start."""
+        print("\nTesting daily cycle quarter alignment to anchor:")
+        print("=" * 80)
+        H = 60  # minutes per hour
+        cases = [
+            # (offset_min, expected_q, description)
+            (0,        0, "Anchor → Q1 start"),
+            (6 * H - 1, 0, "Anchor + 6h−1m → Q1 (last minute)"),
+            (6 * H,    1, "Anchor + 6h → Q2 start"),
+            (12 * H,   2, "Anchor + 12h → Q3 start"),
+            (18 * H,   3, "Anchor + 18h → Q4 start"),
+            (24 * H - 1, 3, "Anchor + 24h−1m → Q4 (last minute)"),
+            (24 * H,   0, "Anchor + 24h → Q1 of next daily cycle"),
+            (-1,       3, "Anchor − 1m → Q4 of previous daily cycle"),
+            (-24 * H,  0, "Anchor − 24h → Q1 of previous daily cycle"),
+        ]
+        print(f"{'Offset (min)':<14} {'Q (actual)':<12} {'Q (expected)':<14} {'Status':<8} {'Description'}")
+        print("-" * 80)
+        all_passed = True
+        for offset_min, expected_q, desc in cases:
+            t_ms = self.anchor_ms + offset_min * 60 * 1000
+            _, q_idx = cycle_math(t_ms, self.anchor_ms, CYCLE_DAY_MS)
+            ok = q_idx == expected_q
+            status = "✓" if ok else "✗"
+            print(f"{offset_min:<14} {q_idx:<12} {expected_q:<14} {status:<8} {desc}")
+            if not ok:
+                all_passed = False
+        return all_passed
+
+    def test_day_aligns_with_6h(self):
+        """Every daily Q-boundary must coincide with a 6H cycle start."""
+        print("\nTesting daily quarter boundaries coincide with 6H cycle starts:")
+        print("=" * 80)
+        all_passed = True
+        for q in range(4):
+            boundary_ms = self.anchor_ms + q * QUARTER_DAY_MS
+            cycle_start_6h, q_idx_6h = cycle_math(boundary_ms, self.anchor_ms, CYCLE_6H_MS)
+            ok = cycle_start_6h == boundary_ms and q_idx_6h == 0
+            status = "✓" if ok else "✗"
+            print(f"  Daily Q{q+1} boundary @ anchor+{q*6}h → is 6H cycle start? {ok} {status}")
+            if not ok:
+                all_passed = False
+        return all_passed
+
     def test_q1_starts_on_anchor(self):
         """Q1 of the cycle containing the anchor must start exactly at the anchor."""
         print("\nTesting Q1 lands on anchor timestamp:")
@@ -186,6 +233,8 @@ def main():
         v.test_q1_starts_on_anchor(),
         v.test_6h_quarter_alignment(),
         v.test_6h_aligns_with_90m(),
+        v.test_day_quarter_alignment(),
+        v.test_day_aligns_with_6h(),
     ]
     v.export_validation_data()
 

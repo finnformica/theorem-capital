@@ -61,11 +61,20 @@ f_tf_enabled(tf_list) =>
     clean_list = str.replace_all(tf_list, " ", "")
     str.contains("," + clean_list + ",", "," + current_label + ",")
 
-// Master anchor: first bar matching DOW+hour+minute. Pine's dayofweek is 1-7 (Sun=1);
-// master input is 0-6 (Sun=0), so compare with +1 offset.
+// Master anchor: computed synthetically — the most recent past occurrence of
+// (master DOW + master hour + master minute) at or before the first processed bar.
+// This does NOT require a real bar to exist at that time (avoids data-gap issues
+// on symbols that don't tick through weekend/session boundaries). Pine's dayofweek
+// is 1-7 (Sun=1); master input is 0-6 (Sun=0), so target_dow = master + 1.
 var int anchor = na
-if na(anchor) and dayofweek == master_start_dow + 1 and hour == master_start_hour and minute == master_start_minute
-    anchor := time
+if na(anchor)
+    target_dow_pine = master_start_dow + 1
+    day_diff        = (dayofweek - target_dow_pine + 7) % 7
+    target_date_ms  = time - day_diff * 24 * 60 * 60 * 1000
+    candidate = timestamp(syminfo.timezone, year(target_date_ms), month(target_date_ms), dayofmonth(target_date_ms), master_start_hour, master_start_minute)
+    // If target hour/minute is later in the day than the current bar, candidate is in the
+    // future → step back one week to guarantee anchor is in the past.
+    anchor := candidate > time ? candidate - 7 * 24 * 60 * 60 * 1000 : candidate
 
 f_cycle_math(t, a, cycle_ms) =>
     cycle_idx = math.floor((t - a) / cycle_ms)
@@ -97,7 +106,7 @@ f_render_cycle(cycle_ms, y_bot, y_top, tf_list, label_prefix, boxes_arr, labels_
             for q = 0 to 3
                 q_start = cycle_start + q * quarter_ms
                 q_end   = q_start + quarter_ms
-                new_box = box.new(q_start, y_top, q_end, y_bot, xloc=xloc.bar_time, bgcolor=f_quarter_color(q), border_color=color.new(color.black, 80), border_width=1)
+                new_box = box.new(q_start, y_top, q_end, y_bot, xloc=xloc.bar_time, bgcolor=f_quarter_color(q), border_color=color.new(color.white, 50), border_width=1)
                 array.push(boxes_arr, new_box)
                 if show_labels
                     new_label = label.new(q_start + math.floor(quarter_ms / 2), (y_top + y_bot) / 2, text=label_prefix + "Q" + str.tostring(q + 1), xloc=xloc.bar_time, style=label.style_none, textcolor=color.white, size=f_label_size())
@@ -109,6 +118,5 @@ var array<box>   boxes_90m  = array.new<box>()
 var array<label> labels_90m = array.new<label>()
 f_render_cycle(CYCLE_90M_MS, 0.0, 1.0, min90_timeframes, "90M ", boxes_90m, labels_90m)
 
-// === Y-AXIS SCALE (locks pane range [0, 6] for future 6-cycle layout) ===
-plot(0.0, "scale_bot", display=display.none)
-plot(6.0, "scale_top", display=display.none)
+// Plot to maintain pane scale (invisible; boxes drive the visible y-range)
+plot(0.5, "", color.new(color.white, 100), display=display.none)

@@ -1,289 +1,519 @@
 //@version=6
-indicator("Theorems Sessions Bottom Pane", "Sessions Timeline", overlay=false, max_boxes_count=500, max_labels_count=500)
+indicator("Theorems Sessions Bottom Pane V2 - All Timeframes", "Sessions", overlay=false, max_boxes_count=500, max_labels_count=500)
 
 // === CONFIGURATION ===
-// Display settings
 show_labels = input.bool(true, "Show Session Labels", group="Display")
 label_size = input.string("small", "Label Size", options=["tiny", "small", "normal"], group="Display")
-max_history_bars = input.int(200, "Maximum History Bars", minval=50, maxval=500, group="Display")
 
-// Layer enables
-enable_day = input.bool(true, "Enable Day Sessions", group="Layers")
-enable_week = input.bool(true, "Enable Week Sessions", group="Layers")
-enable_month = input.bool(true, "Enable Month Sessions", group="Layers")
+// Master timing configuration - all cycles inherit from this single point
+master_start_dow = input.int(2, "Master Start Day of Week", minval=0, maxval=6, group="Master Timing", tooltip="0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday")
+master_start_hour = input.int(21, "Master Start Hour", minval=0, maxval=23, group="Master Timing", tooltip="Hour in 24h format (0-23)")
+master_start_minute = input.int(15, "Master Start Minute", minval=0, maxval=59, group="Master Timing")
 
-// Session Colors
-color_q1 = input.color(color.new(#708090, 50), "Quarter 1 Color", group="Colors")
-color_q2 = input.color(color.new(#800000, 50), "Quarter 2 Color", group="Colors")
-color_q3 = input.color(color.new(#006400, 50), "Quarter 3 Color", group="Colors")
-color_q4 = input.color(color.new(#191970, 50), "Quarter 4 Color", group="Colors")
+// Timeframe visibility settings (comma-separated list of timeframes)
+year_timeframes = input.string("H4,H1", "Year Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,1D,1W,1M")
+month_timeframes = input.string("H4,H1", "Month Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,1D,1W,1M")
+week_timeframes = input.string("H4,H1,M15", "Week Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,1D,1W,1M")
+day_timeframes = input.string("M15,M5,M1", "Day Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,1D,1W,1M")
+hour6_timeframes = input.string("M5,M1", "6-Hour Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,1D,1W,1M")
+min90_timeframes = input.string("M1", "90-Min Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,1D,1W,1M")
 
-// Day Session Times (fixed for all markets)
-day_session1_start = input.int(0, "Day Q1 Start Hour", minval=0, maxval=23, group="Day Sessions")
-day_session2_start = input.int(6, "Day Q2 Start Hour", minval=0, maxval=23, group="Day Sessions")
-day_session3_start = input.int(12, "Day Q3 Start Hour", minval=0, maxval=23, group="Day Sessions")
-day_session4_start = input.int(18, "Day Q4 Start Hour", minval=0, maxval=23, group="Day Sessions")
+// Universal Quarter Colors
+q1_color = input.color(color.new(color.gray, 80), "Quarter 1 Color", group="Colors")
+q2_color = input.color(color.new(color.red, 80), "Quarter 2 Color", group="Colors")
+q3_color = input.color(color.new(color.green, 80), "Quarter 3 Color", group="Colors")
+q4_color = input.color(color.new(color.blue, 80), "Quarter 4 Color", group="Colors")
 
-// === STATE TRACKING ===
-// We need to track session states properly
-var int lastDaySession = -1
-var int lastWeekSession = -1
-var int lastMonthSession = -1
+// Removed separate cycle settings - now using master timing configuration
 
-// Track box references for each session
-var box dayBox = na
-var box weekBox = na
-var box monthBox = na
+// === STATE VARIABLES ===
+var int[] currentPeriods = array.new<int>(6, -1)  // [year, month, week, day, 6hour, 90min]
+var box[] currentBoxes = array.new<box>(6, na)    // [year, month, week, day, 6hour, 90min]
 
-// Track when sessions started
-var int daySessionStartBar = na
-var int weekSessionStartBar = na
-var int monthSessionStartBar = na
+// Session type indices
+YEAR_SESSION = 0
+MONTH_SESSION = 1
+WEEK_SESSION = 2
+DAY_SESSION = 3
+HOUR6_SESSION = 4
+MIN90_SESSION = 5
 
-// Arrays for cleanup
+// Arrays for managing multiple boxes and labels
 var box[] allBoxes = array.new<box>()
 var label[] allLabels = array.new<label>()
 
-// === FUNCTIONS ===
+// === HELPER FUNCTIONS ===
 
-// Get day quarter (0-3) based on hour
-getDayQuarter(h) =>
-    if h >= day_session4_start or h < day_session1_start
-        3  // Q4: Evening/Night
-    else if h >= day_session3_start
-        2  // Q3: Afternoon
-    else if h >= day_session2_start
-        1  // Q2: Morning
+getBorderColor() =>
+    color.white
+
+getTextColor() =>
+    color.white
+
+// === TIMEFRAME VISIBILITY FUNCTIONS ===
+
+// Remove all spaces from a string
+stripSpaces(str) =>
+    result = ""
+    for i = 0 to str.length(str) - 1
+        char = str.substring(str, i, i + 1)
+        if char != " "
+            result := result + char
+    result
+
+// Get current timeframe as a string (M1, M5, H1, etc.)
+getCurrentTimeframeString() =>
+    tf = timeframe.period
+
+    // Handle specific timeframes first
+    if tf == "D"
+        "1D"
+    else if tf == "W"
+        "1W"
+    else if tf == "M"
+        "1M"
     else
-        0  // Q1: Early Morning
+        // Try to parse as number
+        tfNum = str.tonumber(tf)
+        if not na(tfNum)
+            // Handle hour timeframes (60 = H1, 240 = H4, etc.)
+            if tfNum >= 60
+                hours = math.floor(tfNum / 60)
+                "H" + str.tostring(hours)
+            // Handle minute timeframes (1, 5, 15, 30, 45)
+            else
+                "M" + str.tostring(tfNum)
+        else
+            // Return as-is if can't parse
+            tf
 
-// Get week quarter (0-3)
-// Trading week perspective: Sunday 18:00 to Friday 17:00 (NYC time)
-getWeekQuarter(currentTime) =>
-    dow = dayofweek(currentTime)
-    h = hour(currentTime)
+// Check if current timeframe is in the provided list
+isTimeframeVisible(timeframeList) =>
+    // Strip all spaces from the input
+    cleanList = stripSpaces(timeframeList)
+    currentTF = getCurrentTimeframeString()
 
-    // Simple approach: divide the trading week into quarters
-    // Q1: Sun 18:00 - Tue 06:00
-    // Q2: Tue 06:00 - Wed 18:00
-    // Q3: Wed 18:00 - Fri 06:00
-    // Q4: Fri 06:00 - Sun 18:00 (includes weekend)
+    // Check if current timeframe is in the list
+    str.contains(cleanList, currentTF)
 
-    quarter = 0
-    if dow == 1  // Sunday
-        quarter := h >= 18 ? 0 : 3
-    else if dow == 2  // Monday
-        quarter := 0
-    else if dow == 3  // Tuesday
-        quarter := h < 6 ? 0 : 1
-    else if dow == 4  // Wednesday
-        quarter := h < 18 ? 1 : 2
-    else if dow == 5  // Thursday
-        quarter := 2
-    else if dow == 6  // Friday
-        quarter := h < 6 ? 2 : 3
-    else if dow == 7  // Saturday
-        quarter := 3
-
-    quarter
-
-// Get month quarter (0-3) based on week of month
-// More accurate calculation based on actual week boundaries
-getMonthQuarter(currentTime) =>
-    dom = dayofmonth(currentTime)
-
-    // Calculate which week of the month we're in (0-based)
-    // Week 1: Days 1-7, Week 2: Days 8-14, Week 3: Days 15-21, Week 4: Days 22+
-    weekOfMonth = 0
-    if dom >= 22
-        weekOfMonth := 3  // Week 4+
-    else if dom >= 15
-        weekOfMonth := 2  // Week 3
-    else if dom >= 8
-        weekOfMonth := 1  // Week 2
-    else
-        weekOfMonth := 0  // Week 1
-
-    weekOfMonth
-
-// Get color for quarter
-getQuarterColor(quarter) =>
-    switch quarter
-        0 => color_q1
-        1 => color_q2
-        2 => color_q3
-        3 => color_q4
+// Get color for any quarter (unified)
+getQuarterColor(quarterNum) =>
+    // Use modulo 4 to cycle through colors for sessions with more than 4 quarters
+    colorIndex = quarterNum % 4
+    switch colorIndex
+        0 => q1_color
+        1 => q2_color
+        2 => q3_color
+        3 => q4_color
         => color.gray
 
-// Get label text
-getLabelText(prefix, quarter) =>
-    prefix + "-Q" + str.tostring(quarter + 1)
+// Get year label text
+getYearLabel(quarterNum) =>
+    "Y-Q" + str.tostring(quarterNum + 1)
 
-// Get label size
-getLabelSize() =>
-    switch label_size
-        "tiny" => size.tiny
-        "small" => size.small
-        "normal" => size.normal
-        => size.small
+// Get month label text
+getMonthLabel(weekNum) =>
+    "M-Q" + str.tostring(weekNum + 1)
+
+// Get day label text
+getDayLabel(quarterNum) =>
+    "D-Q" + str.tostring(quarterNum + 1)
+
+// Get 6-hour label text
+get6HourLabel(quarterNum) =>
+    "6H-Q" + str.tostring(quarterNum + 1)
+
+// Get 90-minute label text
+get90MinLabel(segmentNum) =>
+    // Cycle through Q1-Q4 for 90-minute segments
+    quarterNum = segmentNum % 4
+    "90M-Q" + str.tostring(quarterNum + 1)
+
+// Get 22.5-minute label text
+get22_5MinLabel(quarterNum) =>
+    // Cycle through Q1-Q4 for 22.5-minute quarters
+    quarterLabel = quarterNum % 4
+    "22.5M-Q" + str.tostring(quarterLabel + 1)
+
+// === MONTH CYCLE LOGIC ===
+
+// Find the first occurrence of master DOW in the current or previous month
+findMonthCycleStart(currentTime) =>
+    // Get current date components
+    y = year(currentTime)
+    m = month(currentTime)
+    d = dayofmonth(currentTime)
+
+    // Find first occurrence of master DOW in current month
+    firstOfMonth = timestamp(y, m, 1, master_start_hour, master_start_minute, 0)
+    firstDow = dayofweek(firstOfMonth) - 1  // Convert to 0=Sunday format
+
+    // Calculate days to add to get to master DOW
+    daysToAdd = master_start_dow == firstDow ? 0 : (master_start_dow - firstDow + 7) % 7
+
+    // First occurrence of master DOW in current month
+    cycleStartThisMonth = firstOfMonth + (daysToAdd * 86400000)
+
+    // If we're before the cycle start for this month, use previous month's cycle
+    if currentTime < cycleStartThisMonth
+        // Go to previous month
+        prevM = m - 1
+        prevY = y
+        if prevM < 1
+            prevM := 12
+            prevY := y - 1
+
+        firstOfPrevMonth = timestamp(prevY, prevM, 1, master_start_hour, master_start_minute, 0)
+        firstDowPrev = dayofweek(firstOfPrevMonth) - 1
+        daysToAddPrev = master_start_dow == firstDowPrev ? 0 : (master_start_dow - firstDowPrev + 7) % 7
+        cycleStartPrevMonth = firstOfPrevMonth + (daysToAddPrev * 86400000)
+        cycleStartPrevMonth
+    else
+        cycleStartThisMonth
+
+// === WEEK CYCLE LOGIC ===
+
+// Find the most recent occurrence of master week start day
+findWeekCycleStart(currentTime) =>
+    // Get current day of week (0=Sunday, 1=Monday, etc.)
+    currentDow = dayofweek(currentTime) - 1
+
+    // Calculate days back to the most recent master start day
+    daysBack = (currentDow - master_start_dow + 7) % 7
+
+    // If we're on the start day but before the start time, go back to previous week
+    if daysBack == 0
+        currentHour = hour(currentTime)
+        currentMinute = minute(currentTime)
+        if currentHour < master_start_hour or (currentHour == master_start_hour and currentMinute < master_start_minute)
+            daysBack := 7
+
+    // Calculate the timestamp of the week cycle start
+    msBack = daysBack * 86400000
+    roughStart = currentTime - msBack
+
+    // Adjust to exact start time
+    timestamp(year(roughStart), month(roughStart), dayofmonth(roughStart),
+              master_start_hour, master_start_minute, 0)
+
+// === SESSION CONFIGURATION LAYER ===
+
+// Create a session configuration
+// Returns: [id, quarterDuration, maxQuarters, hasGaps, startOffset]
+createSessionConfig(id, quarterDuration, maxQuarters, hasGaps, startOffset) =>
+    config = array.new<float>(5)
+    array.set(config, 0, id)
+    array.set(config, 1, quarterDuration)
+    array.set(config, 2, maxQuarters)
+    array.set(config, 3, hasGaps ? 1 : 0)
+    array.set(config, 4, startOffset)
+    config
+
+// Getters for clarity
+getSessionId(config) => math.floor(array.get(config, 0))
+getQuarterDuration(config) => array.get(config, 1)
+getMaxQuarters(config) => math.floor(array.get(config, 2))
+hasGaps(config) => array.get(config, 3) == 1
+getStartOffset(config) => array.get(config, 4)
 
 // === LAYER POSITIONING ===
 layer_height = 30
-base_y = 5
-month_y = base_y  // Bottom layer
-week_y = base_y + layer_height  // Middle layer
-day_y = base_y + layer_height * 2  // Top layer
+base_y = 10
+
+// Check visibility for each session type
+year_visible = isTimeframeVisible(year_timeframes)
+month_visible = isTimeframeVisible(month_timeframes)
+week_visible = isTimeframeVisible(week_timeframes)
+day_visible = isTimeframeVisible(day_timeframes)
+hour6_visible = isTimeframeVisible(hour6_timeframes)
+min90_visible = isTimeframeVisible(min90_timeframes)
+
+// Calculate dynamic Y positions (stack visible layers with no gaps)
+current_y = base_y
+
+// Stack layers from bottom to top based on visibility
+year_y = year_visible ? current_y : na
+current_y := year_visible ? current_y + layer_height : current_y
+
+month_y = month_visible ? current_y : na
+current_y := month_visible ? current_y + layer_height : current_y
+
+week_y = week_visible ? current_y : na
+current_y := week_visible ? current_y + layer_height : current_y
+
+day_y = day_visible ? current_y : na
+current_y := day_visible ? current_y + layer_height : current_y
+
+hour6_y = hour6_visible ? current_y : na
+current_y := hour6_visible ? current_y + layer_height : current_y
+
+min90_y = min90_visible ? current_y : na
+current_y := min90_visible ? current_y + layer_height : current_y
+
+// Max Y position for scaling
+max_y_position = current_y
+
+// === DATA CALCULATION LAYER ===
+
+// Calculate the reference start time for a session
+calculateSessionStart(currentTime, sessionType) =>
+    if sessionType == YEAR_SESSION
+        // Year starts at Jan 1
+        timestamp(year(currentTime), 1, 1, 0, 0, 0)
+    else if sessionType == MONTH_SESSION
+        // Month uses master start day
+        findMonthCycleStart(currentTime)
+    else if sessionType == WEEK_SESSION
+        // Week uses master start day and time
+        findWeekCycleStart(currentTime)
+    else if sessionType == DAY_SESSION
+        // Day starts at master hour:minute
+        todayStart = timestamp(year(currentTime), month(currentTime), dayofmonth(currentTime), master_start_hour, master_start_minute, 0)
+
+        // If current time is before today's start, use yesterday's start
+        if currentTime < todayStart
+            todayStart - 86400000  // Go back 24 hours
+        else
+            todayStart
+    else if sessionType == HOUR6_SESSION
+        // 6-hour cycles aligned to master time
+        // First, find today's master start time
+        todayStart = timestamp(year(currentTime), month(currentTime), dayofmonth(currentTime), master_start_hour, master_start_minute, 0)
+
+        // If current time is before today's start, use yesterday's start
+        if currentTime < todayStart
+            todayStart := todayStart - 86400000  // Go back 24 hours
+
+        // Calculate which 6-hour period we're in (0-3)
+        timeSinceStart = currentTime - todayStart
+        sixHourPeriod = math.floor(timeSinceStart / 21600000) % 4
+
+        // Return the start of current 6-hour period
+        todayStart + (sixHourPeriod * 21600000)
+    else if sessionType == MIN90_SESSION
+        // 90-minute cycles aligned to master time
+        // First, find today's master start time
+        todayStart = timestamp(year(currentTime), month(currentTime), dayofmonth(currentTime), master_start_hour, master_start_minute, 0)
+
+        // If current time is before today's start, use yesterday's start
+        if currentTime < todayStart
+            todayStart := todayStart - 86400000  // Go back 24 hours
+
+        // Calculate which 90-minute period we're in
+        timeSinceStart = currentTime - todayStart
+        ninetyMinPeriod = math.floor(timeSinceStart / 5400000)
+
+        // Return the start of current 90-minute period
+        todayStart + (ninetyMinPeriod * 5400000)
+    else
+        // Default to epoch
+        timestamp(1970, 1, 1, 0, 0, 0)
+
+// Calculate session data without any rendering
+// Returns: [quarterIndex, isActive, shouldClearBox]
+calculateSessionData(currentTime, config) =>
+    sessionId = getSessionId(config)
+    quarterDuration = getQuarterDuration(config)
+    maxQuarters = getMaxQuarters(config)
+    hasGaps = hasGaps(config)
+
+    // Get start reference
+    startTime = calculateSessionStart(currentTime, sessionId)
+
+    // Calculate elapsed time
+    timeElapsed = currentTime - startTime
+    periodsElapsed = math.floor(timeElapsed / quarterDuration)
+
+    // Determine if session is active
+    isActive = not hasGaps or periodsElapsed < maxQuarters
+
+    // Calculate quarter (0-3)
+    quarterIndex = periodsElapsed % maxQuarters
+
+    // Should clear box (for gaps)
+    shouldClear = hasGaps and periodsElapsed >= maxQuarters
+
+    result = array.new<int>(3)
+    array.set(result, 0, quarterIndex)
+    array.set(result, 1, isActive ? 1 : 0)
+    array.set(result, 2, shouldClear ? 1 : 0)
+    result
+
+// === GENERIC SESSION HANDLER ===
+handleSession(sessionType, newPeriod, layerY, sessionColor, labelPrefix, showLabel) =>
+    // Get current state for this session type
+    currentPeriod = array.get(currentPeriods, sessionType)
+    currentBox = array.get(currentBoxes, sessionType)
+
+    // Check if period changed
+    if newPeriod != currentPeriod
+        // Close previous box
+        if not na(currentBox)
+            box.set_right(currentBox, bar_index)
+
+        // Create new box
+        newBox = box.new(
+            left=bar_index,
+            top=layerY + layer_height,
+            right=bar_index + 1,
+            bottom=layerY,
+            bgcolor=sessionColor,
+            border_color=getBorderColor(),
+            border_width=1,
+            border_style=line.style_solid
+        )
+        array.push(allBoxes, newBox)
+
+        // Add label if enabled
+        if showLabel and show_labels
+            // Use modulo 4 for proper quarter labeling (Q1-Q4)
+            quarterLabel = (newPeriod % 4) + 1
+            lbl = label.new(
+                x=bar_index,
+                y=layerY + layer_height/2,
+                text=labelPrefix + str.tostring(quarterLabel),
+                style=label.style_label_left,
+                color=color.new(color.black, 100),
+                textcolor=getTextColor(),
+                size=label_size == "tiny" ? size.tiny : label_size == "normal" ? size.normal : size.small
+            )
+            array.push(allLabels, lbl)
+
+        // Update state
+        array.set(currentPeriods, sessionType, newPeriod)
+        array.set(currentBoxes, sessionType, newBox)
+    else
+        // Extend current box
+        if not na(currentBox)
+            box.set_right(currentBox, bar_index + 1)
+
+// === RENDERING LAYER ===
+
+// Render a session based on calculated data
+renderSession(sessionType, quarterIndex, isActive, shouldClear, layerY, labelPrefix) =>
+    if shouldClear
+        // Clear box during gap period
+        currentBox = array.get(currentBoxes, sessionType)
+        if not na(currentBox)
+            array.set(currentBoxes, sessionType, na)
+    else if isActive
+
+        // Draw the session using existing handler
+        handleSession(
+            sessionType,
+            quarterIndex,
+            layerY,
+            getQuarterColor(quarterIndex),
+            labelPrefix,
+            show_labels
+        )
+
+// === SESSION PROCESSOR ===
+
+// Process a session from config to render
+processSessionDeclarative(currentTime, config, layerY, enabled, labelPrefix) =>
+    if not enabled
+        na
+    else
+
+        // Step 1: Calculate data
+        sessionData = calculateSessionData(currentTime, config)
+        quarterIndex = array.get(sessionData, 0)
+        isActive = array.get(sessionData, 1) == 1
+        shouldClear = array.get(sessionData, 2) == 1
+
+        // Step 2: Render based on data
+        sessionId = getSessionId(config)
+        renderSession(sessionId, quarterIndex, isActive, shouldClear, layerY, labelPrefix)
+
+// === SESSION CONFIGURATIONS ===
+
+// Define all sessions declaratively
+yearConfig = createSessionConfig(
+    YEAR_SESSION,
+    91.25 * 24 * 60 * 60 * 1000,  // 91.25 days per quarter (3 months)
+    4,           // 4 quarters
+    false,       // no gaps
+    0            // start offset
+)
+
+monthConfig = createSessionConfig(
+    MONTH_SESSION,
+    7 * 24 * 60 * 60 * 1000,   // 7 days (1 week) per quarter
+    4,           // 4 quarters
+    true,        // has gaps after week 4
+    0            // uses custom start calculation
+)
+
+weekConfig = createSessionConfig(
+    WEEK_SESSION,
+    30 * 60 * 60 * 1000,    // 30 hours per quarter
+    4,           // 4 quarters (120 hours total = 5 days)
+    true,        // has gaps after 4th quarter until next Tuesday
+    0            // uses custom week cycle start calculation
+)
+
+dayConfig = createSessionConfig(
+    DAY_SESSION,
+    6 * 60 * 60 * 1000,    // 6 hours per quarter
+    4,           // 4 quarters
+    false,       // no gaps - continuous
+    0            // starts at master time
+)
+
+hour6Config = createSessionConfig(
+    HOUR6_SESSION,
+    90 * 60 * 1000,     // 90 minutes per quarter
+    4,           // 4 quarters cycling
+    false,       // no gaps - continuous
+    0            // aligned to master time
+)
+
+min90Config = createSessionConfig(
+    MIN90_SESSION,
+    22.5 * 60 * 1000,     // 22.5 minutes per quarter
+    4,           // 4 quarters cycling (Q1-Q4 repeating)
+    false,       // no gaps - continuous
+    0            // aligned to master time
+)
 
 // === MAIN LOGIC ===
 
-// Get current time components
-currentHour = hour(time)
 currentTime = time
 
-// Calculate current sessions
-currentDaySession = getDayQuarter(currentHour)
-currentWeekSession = getWeekQuarter(currentTime)
-currentMonthSession = getMonthQuarter(currentTime)
+// Process each session through the declarative pipeline (only if visible)
+if year_visible
+    processSessionDeclarative(currentTime, yearConfig, year_y, true, "Y-Q")
 
-// === DAY SESSION HANDLING ===
-if enable_day
-    // Check if day session changed
-    if currentDaySession != lastDaySession
-        // Finish previous box
-        if not na(dayBox)
-            box.set_right(dayBox, bar_index)
+if month_visible
+    processSessionDeclarative(currentTime, monthConfig, month_y, true, "M-Q")
 
-        // Create new box
-        daySessionStartBar := bar_index
-        dayBox := box.new(
-            left=bar_index,
-            top=day_y + layer_height,
-            right=bar_index + 1,
-            bottom=day_y,
-            bgcolor=getQuarterColor(currentDaySession),
-            border_color=color.new(color.gray, 80),
-            border_width=1
-        )
-        array.push(allBoxes, dayBox)
+if week_visible
+    processSessionDeclarative(currentTime, weekConfig, week_y, true, "W-Q")
 
-        // Add label
-        if show_labels
-            lbl = label.new(
-                x=bar_index,
-                y=day_y + layer_height/2,
-                text=getLabelText("D", currentDaySession),
-                style=label.style_label_left,
-                color=color.new(color.black, 100),
-                textcolor=color.white,
-                size=getLabelSize()
-            )
-            array.push(allLabels, lbl)
+if day_visible
+    processSessionDeclarative(currentTime, dayConfig, day_y, true, "D-Q")
 
-        lastDaySession := currentDaySession
-    else
-        // Extend current box
-        if not na(dayBox)
-            box.set_right(dayBox, bar_index + 1)
+if hour6_visible
+    processSessionDeclarative(currentTime, hour6Config, hour6_y, true, "6H-Q")
 
-// === WEEK SESSION HANDLING ===
-if enable_week
-    // Check if week session changed
-    if currentWeekSession != lastWeekSession
-        // Finish previous box
-        if not na(weekBox)
-            box.set_right(weekBox, bar_index)
-
-        // Create new box
-        weekSessionStartBar := bar_index
-        weekBox := box.new(
-            left=bar_index,
-            top=week_y + layer_height,
-            right=bar_index + 1,
-            bottom=week_y,
-            bgcolor=getQuarterColor(currentWeekSession),
-            border_color=color.new(color.gray, 80),
-            border_width=1
-        )
-        array.push(allBoxes, weekBox)
-
-        // Add label
-        if show_labels
-            lbl = label.new(
-                x=bar_index,
-                y=week_y + layer_height/2,
-                text=getLabelText("W", currentWeekSession),
-                style=label.style_label_left,
-                color=color.new(color.black, 100),
-                textcolor=color.white,
-                size=getLabelSize()
-            )
-            array.push(allLabels, lbl)
-
-        lastWeekSession := currentWeekSession
-    else
-        // Extend current box
-        if not na(weekBox)
-            box.set_right(weekBox, bar_index + 1)
-
-// === MONTH SESSION HANDLING ===
-if enable_month
-    // Check if month session changed
-    if currentMonthSession != lastMonthSession
-        // Finish previous box
-        if not na(monthBox)
-            box.set_right(monthBox, bar_index)
-
-        // Create new box
-        monthSessionStartBar := bar_index
-        monthBox := box.new(
-            left=bar_index,
-            top=month_y + layer_height,
-            right=bar_index + 1,
-            bottom=month_y,
-            bgcolor=getQuarterColor(currentMonthSession),
-            border_color=color.new(color.gray, 80),
-            border_width=1
-        )
-        array.push(allBoxes, monthBox)
-
-        // Add label
-        if show_labels
-            lbl = label.new(
-                x=bar_index,
-                y=month_y + layer_height/2,
-                text=getLabelText("M", currentMonthSession),
-                style=label.style_label_left,
-                color=color.new(color.black, 100),
-                textcolor=color.white,
-                size=getLabelSize()
-            )
-            array.push(allLabels, lbl)
-
-        lastMonthSession := currentMonthSession
-    else
-        // Extend current box
-        if not na(monthBox)
-            box.set_right(monthBox, bar_index + 1)
+if min90_visible
+    processSessionDeclarative(currentTime, min90Config, min90_y, true, "90M-Q")
 
 // === CLEANUP ===
-// Remove old boxes beyond history limit
-if barstate.islast
-    // Clean up boxes
-    while array.size(allBoxes) > 50
-        oldBox = array.shift(allBoxes)
-        if not na(oldBox)
-            box.delete(oldBox)
+while array.size(allBoxes) > 500
+    oldBox = array.shift(allBoxes)
+    if not na(oldBox)
+        box.delete(oldBox)
 
-    // Clean up labels
-    while array.size(allLabels) > 50
-        oldLabel = array.shift(allLabels)
-        if not na(oldLabel)
-            label.delete(oldLabel)
+while array.size(allLabels) > 500
+    oldLabel = array.shift(allLabels)
+    if not na(oldLabel)
+        label.delete(oldLabel)
 
 // === VISUAL GUIDES ===
-hline(day_y + layer_height * 1.5, "", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
-hline(week_y + layer_height * 0.5, "", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
-hline(month_y, "", color=color.new(color.gray, 95), linestyle=hline.style_dotted)
+// Since hlines require constants, we'll skip them for dynamic layouts
+// The boxes themselves provide sufficient visual boundaries
 
-// Invisible plot to maintain scale
-plot(50, "", color.new(color.white, 100), display=display.none)
+// Plot to maintain scale (use calculated max_y_position)
+plot(max_y_position/2, "", color.new(color.white, 100), display=display.none)

@@ -11,12 +11,12 @@ master_start_hour = input.int(21, "Master Start Hour", minval=0, maxval=23, grou
 master_start_minute = input.int(15, "Master Start Minute", minval=0, maxval=59, group="Master Timing")
 
 // Timeframe visibility settings (comma-separated list of timeframes)
-year_timeframes = input.string("H4,H1", "Year Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
-month_timeframes = input.string("H4,H1", "Month Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
-week_timeframes = input.string("H4,H1,M15", "Week Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
-day_timeframes = input.string("M15,M5,M1", "Day Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
-hour6_timeframes = input.string("M5,M1", "6-Hour Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
-min90_timeframes = input.string("M1", "90-Min Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,D1,W1,MN1")
+year_timeframes = input.string("H4,H1", "Year Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,1D,1W,1M")
+month_timeframes = input.string("H4,H1", "Month Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,1D,1W,1M")
+week_timeframes = input.string("H4,H1,M15", "Week Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,1D,1W,1M")
+day_timeframes = input.string("M15,M5,M1", "Day Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,1D,1W,1M")
+hour6_timeframes = input.string("M5,M1", "6-Hour Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,1D,1W,1M")
+min90_timeframes = input.string("M1", "90-Min Session Timeframes", group="Timeframe Visibility", tooltip="Comma-separated list: M1,M5,M15,M30,M45,H1,H4,1D,1W,1M")
 
 // Universal Quarter Colors
 q1_color = input.color(color.new(color.gray, 80), "Quarter 1 Color", group="Colors")
@@ -67,11 +67,11 @@ getCurrentTimeframeString() =>
 
     // Handle specific timeframes first
     if tf == "D"
-        "D1"
+        "1D"
     else if tf == "W"
-        "W1"
+        "1W"
     else if tf == "M"
-        "MN1"
+        "1M"
     else
         // Try to parse as number
         tfNum = str.tonumber(tf)

@@ -24,6 +24,9 @@ This directory contains Pine Script indicators for TradingView, specifically foc
 - ✅ Improved array management and cleanup
 - ✅ Enhanced bar indexing logic to prevent errors
 
+**Quarterly Cycles (Step 1 — 90min cycle)**:
+Added generic cycle-based renderer anchored to master DOW + hour + minute. Helpers: `f_tf_enabled`, `f_anchor` (auto-locks on first matching bar), `f_cycle_math` (pure cycle_start + quarter_idx math), `f_quarter_color`, `f_render_cycle` (full repaint on `barstate.islast`, renders up to `MAX_VISIBLE_CYCLES=50` cycles back, respects `max_boxes_count=500`). 90min cycle draws on row 0 (y∈[0,1]); pane scale locked to [0,6] for future cycles. Tests: `tests/test_quarterly_cycles.py`.
+
 ## Testing Infrastructure
 
 ### `tests/` Directory

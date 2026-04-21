@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tradingview": {
+      "command": "node",
+      "args": ["/Users/finnformica/Documents/programming/theorem-capital/tradingview-mcp-jackson/src/server.js"]
+    }
+  }
+}

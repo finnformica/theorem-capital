@@ -7,9 +7,10 @@ label_size = input.string("small", "Label Size", options=["tiny", "small", "norm
 
 // Master timing — every cycle anchors to this single point.
 // Changing any of these shifts Q1 of every cycle so it begins at the master time.
-master_start_dow    = input.int(2,  "Master Start Day of Week", minval=0, maxval=6, group="Master Timing", tooltip="0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday")
+master_start_dow    = input.int(1,  "Master Start Day of Week", minval=0, maxval=6, group="Master Timing", tooltip="0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday")
 master_start_hour   = input.int(21, "Master Start Hour",        minval=0, maxval=23, group="Master Timing", tooltip="Hour in 24h format (0-23)")
 master_start_minute = input.int(15, "Master Start Minute",      minval=0, maxval=59, group="Master Timing")
+session_timezone    = input.string("Europe/London", "Session Timezone", group="Master Timing", tooltip="IANA timezone (e.g. 'Europe/London', 'America/New_York', 'Asia/Tokyo', 'UTC') that the master start DOW/hour/minute are interpreted in. Should match the chart's display timezone so Monday 21:15 in the input lands on Monday 21:15 on screen.")
 
 // Timeframe visibility (comma-separated list)
 year_timeframes  = input.string("H4,H1",     "Year Session Timeframes",   group="Timeframe Visibility", tooltip="Comma-separated: M1,M5,M15,M30,M45,H1,H4,1D,1W,1M")
@@ -48,7 +49,10 @@ QD_6H    = 90.0    * MS_MIN
 QD_90M   = 22.5    * MS_MIN
 
 // === STATE ===
-var int[]   currentPeriods = array.new<int>(6, -1)  // last drawn quarter index per session type
+// Start timestamp (ms) of the last cycle we rendered, per session type. 0 == "not yet drawn".
+// We re-render a cycle's 4 quarters only when its start advances, which guarantees Q4 is drawn
+// even when no bar falls inside its time range (e.g. FX weekend for the week cycle).
+var int[]   lastCycleStart = array.new<int>(6, 0)
 var box[]   allBoxes       = array.new<box>()
 var label[] allLabels      = array.new<label>()
 
@@ -92,20 +96,20 @@ labelSizeVal() =>
 // Year: Jan 1 of the year containing currentTime, at master time-of-day.
 // If before that instant, fall back to Jan 1 of previous year.
 yearStartFor(currentTime) =>
-    y     = year(currentTime)
-    start = timestamp(y, 1, 1, master_start_hour, master_start_minute, 0)
-    currentTime < start ? timestamp(y - 1, 1, 1, master_start_hour, master_start_minute, 0) : start
+    y     = year(currentTime, session_timezone)
+    start = timestamp(session_timezone, y, 1, 1, master_start_hour, master_start_minute, 0)
+    currentTime < start ? timestamp(session_timezone, y - 1, 1, 1, master_start_hour, master_start_minute, 0) : start
 
 // First occurrence of master DOW in (y, m) at master time-of-day.
 firstMasterDowOfMonth(y, m) =>
-    first    = timestamp(y, m, 1, master_start_hour, master_start_minute, 0)
-    firstDow = dayofweek(first) - 1
+    first    = timestamp(session_timezone, y, m, 1, master_start_hour, master_start_minute, 0)
+    firstDow = dayofweek(first, session_timezone) - 1
     addDays  = (master_start_dow - firstDow + 7) % 7
     first + addDays * MS_DAY
 
 monthStartFor(currentTime) =>
-    y         = year(currentTime)
-    m         = month(currentTime)
+    y         = year(currentTime, session_timezone)
+    m         = month(currentTime, session_timezone)
     thisStart = firstMasterDowOfMonth(y, m)
     if currentTime < thisStart
         prevY = m == 1 ? y - 1 : y
@@ -116,19 +120,19 @@ monthStartFor(currentTime) =>
 
 // Most recent master DOW at master time-of-day on or before currentTime.
 weekStartFor(currentTime) =>
-    currentDow = dayofweek(currentTime) - 1
+    currentDow = dayofweek(currentTime, session_timezone) - 1
     daysBack   = (currentDow - master_start_dow + 7) % 7
     if daysBack == 0
-        h  = hour(currentTime)
-        mi = minute(currentTime)
+        h  = hour(currentTime, session_timezone)
+        mi = minute(currentTime, session_timezone)
         if h < master_start_hour or (h == master_start_hour and mi < master_start_minute)
             daysBack := 7
     rough = currentTime - daysBack * MS_DAY
-    timestamp(year(rough), month(rough), dayofmonth(rough), master_start_hour, master_start_minute, 0)
+    timestamp(session_timezone, year(rough, session_timezone), month(rough, session_timezone), dayofmonth(rough, session_timezone), master_start_hour, master_start_minute, 0)
 
 // Today at master time, or yesterday if we're before today's master time.
 dayStartFor(currentTime) =>
-    todayMaster = timestamp(year(currentTime), month(currentTime), dayofmonth(currentTime), master_start_hour, master_start_minute, 0)
+    todayMaster = timestamp(session_timezone, year(currentTime, session_timezone), month(currentTime, session_timezone), dayofmonth(currentTime, session_timezone), master_start_hour, master_start_minute, 0)
     currentTime < todayMaster ? todayMaster - MS_DAY : todayMaster
 
 // Nested cycle start: step forward from the day anchor by cycleLen until we contain currentTime.
@@ -156,10 +160,6 @@ quarterDurationFor(type) =>
         HOUR6_SESSION => QD_6H
         MIN90_SESSION => QD_90M
         => 0.0
-
-// Cycles where Q1-Q4 cover only part of the parent (rest is a gap):
-// Month = 4 weeks inside ~30d. Week = 4 days inside 7d (Mon-Thu; Fri-Sun is gap).
-hasGapAfterQ4(type) => type == MONTH_SESSION or type == WEEK_SESSION
 
 // === LAYER POSITIONING ===
 layer_height = 30
@@ -190,11 +190,9 @@ current_y := min90_visible ? current_y + layer_height : current_y
 max_y_position = current_y
 
 // === DRAW ONE QUARTER (time-anchored, evenly spaced) ===
-drawQuarter(type, q, layerY, labelPrefix) =>
-    start = sessionStartFor(type, time)
-    qDur  = quarterDurationFor(type)
-    left  = math.round(start + q * qDur)
-    right = math.round(start + (q + 1) * qDur)
+drawQuarterAt(q, layerY, labelPrefix, startMs, qDurMs) =>
+    left  = math.round(startMs + q * qDurMs)
+    right = math.round(startMs + (q + 1) * qDurMs)
 
     b = box.new(
         left         = left,
@@ -224,20 +222,20 @@ drawQuarter(type, q, layerY, labelPrefix) =>
         array.push(allLabels, l)
 
 // === PROCESS A SESSION ===
+// When the cycle's start timestamp advances, render all 4 quarters immediately.
+// This back-fills quarters whose time range contains no bars (FX weekend vs week Q4, holidays, etc.)
+// and keeps quarter widths exactly equal in time-space.
 processSession(type, layerY, enabled, labelPrefix) =>
     if enabled
-        start     = sessionStartFor(type, time)
-        qDur      = quarterDurationFor(type)
-        elapsed   = time - start
-        periodIdx = math.floor(elapsed / qDur)
-        inGap     = hasGapAfterQ4(type) and periodIdx >= 4
+        start   = sessionStartFor(type, time)
+        startMs = math.round(start)
+        prev    = array.get(lastCycleStart, type)
 
-        if not inGap
-            qIdx = math.floor(periodIdx % 4)
-            prev = array.get(currentPeriods, type)
-            if qIdx != prev
-                drawQuarter(type, qIdx, layerY, labelPrefix)
-                array.set(currentPeriods, type, qIdx)
+        if startMs != prev
+            qDur = quarterDurationFor(type)
+            for q = 0 to 3
+                drawQuarterAt(q, layerY, labelPrefix, start, qDur)
+            array.set(lastCycleStart, type, startMs)
 
 // === MAIN ===
 if year_visible

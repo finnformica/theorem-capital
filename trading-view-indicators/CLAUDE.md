@@ -23,6 +23,7 @@ This directory contains Pine Script indicators for TradingView, specifically foc
 - ✅ Added null checks for historical data access
 - ✅ Improved array management and cleanup
 - ✅ Enhanced bar indexing logic to prevent errors
+- ✅ Added `session_timezone` input (default `Europe/London`) threaded through every `timestamp()`/`year()`/`month()`/`dayofmonth()`/`hour()`/`minute()`/`dayofweek()` call so master DOW/hour/minute are interpreted in the user's chart timezone instead of `syminfo.timezone`
 
 ## Testing Infrastructure
 

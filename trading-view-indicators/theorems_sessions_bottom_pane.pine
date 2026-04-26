@@ -1,5 +1,5 @@
 //@version=6
-indicator("Theorems Quarterly Cycles Bottom Pane V2 - All Timeframes", "Quarterly Cycles", overlay=false, max_boxes_count=500, max_labels_count=500)
+indicator("Theorems Quarterly Cycles Bottom Pane V2 - All Timeframes", "Quarters", overlay=false, max_boxes_count=500, max_labels_count=500)
 
 // === CONFIGURATION ===
 show_labels = input.bool(true, "Show Quarter Labels", group="Display")
@@ -275,12 +275,13 @@ processSession(type, layerY, enabled, labelPrefix) =>
 // Stops at max_history_cycles, chart history start, or a 450-box budget (leaves 50 for live cycles).
 backfillSession(type, layerY, enabled, labelPrefix) =>
     if enabled and not na(firstBarTime)
-        qDur   = quarterDurationFor(type)
-        cursor = sessionStartFor(type, time)
+        qDur = quarterDurationFor(type)
+        // Round to int so we can feed cursor back into sessionStartFor (which calls year/month/etc. requiring int).
+        int cursor = math.round(sessionStartFor(type, time))
         for i = 1 to max_history_cycles
             if array.size(allBoxes) >= 450
                 break
-            cursor := sessionStartFor(type, cursor - 1)
+            cursor := math.round(sessionStartFor(type, cursor - 1))
             if cursor < firstBarTime
                 break
             for q = 0 to 3

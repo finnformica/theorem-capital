@@ -130,16 +130,12 @@ firstMasterDowOfMonth(y, m) =>
     nthDay   = 1 + addDays
     nthDay > daysInMonth(y, m) ? na : timestamp(tzString(), y, m, nthDay, master_start_hour, master_start_minute, 0)
 
-// Most recent master_start_dow at master time-of-day on or before currentTime.
-mostRecentMasterDow(currentTime) =>
-    currentDow = dayofweek(currentTime, tzString()) - 1
-    daysBack   = (currentDow - master_start_dow + 7) % 7
-    if daysBack == 0
-        h  = hour(currentTime, tzString())
-        mi = minute(currentTime, tzString())
-        if h < master_start_hour or (h == master_start_hour and mi < master_start_minute)
-            daysBack := 7
-    rough = currentTime - daysBack * MS_DAY
+// master_start_dow at master time-of-day in the calendar week containing currentTime.
+// Used so that the bar containing the anchor (e.g. Mon 21:00 H1 bar containing Mon 21:15) captures it.
+weekAnchorForBar(currentTime) =>
+    currentDow      = dayofweek(currentTime, tzString()) - 1
+    days_to_anchor  = (currentDow - master_start_dow + 7) % 7
+    rough           = currentTime - days_to_anchor * MS_DAY
     timestamp(tzString(), year(rough, tzString()), month(rough, tzString()), dayofmonth(rough, tzString()), master_start_hour, master_start_minute, 0)
 
 // Draw all events from a layer's state arrays.
@@ -182,8 +178,8 @@ if not na(month_event) and monthKey != lastMonthKey and month_event >= time and 
     array.push(monthPrices, open)
     lastMonthKey := monthKey
 
-// Week true open: most-recent master_start_dow at master time.
-int week_event = math.round(mostRecentMasterDow(time))
+// Week true open: master_start_dow at master time, anchor for this calendar week.
+int week_event = math.round(weekAnchorForBar(time))
 if week_event != lastWeekKey and week_event >= time and week_event < bar_end
     array.push(weekStarts, week_event)
     array.push(weekPrices, open)

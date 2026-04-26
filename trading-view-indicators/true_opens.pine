@@ -1,0 +1,214 @@
+//@version=6
+indicator("Theorems True Opens", "TrueOpens", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// === DISPLAY ===
+show_labels = input.bool(true, "Show Labels", group="Display")
+
+// === MASTER TIMING ===
+// Every true open inherits from this single anchor point. Each layer's event fires at master DOW + hour:minute,
+// in the configured timezone — exactly mirroring the quarterly_cycles indicator's master-timing model.
+master_start_month  = input.int(4,    "Master Start Month",       minval=1,   maxval=12, group="Master Timing", tooltip="Anchor month for the Year True Open. The year line begins on the 1st occurrence of 'Master Start Day of Week' in this month each year. Encoding: 1=Jan, 2=Feb, ..., 12=Dec.")
+master_start_dow    = input.int(1,    "Master Start Day of Week", minval=0,   maxval=6,  group="Master Timing", tooltip="Anchor day-of-week for Year / Month / Week true opens. Year = 1st occurrence in 'Master Start Month'. Month = 1st occurrence each month. Week = most-recent occurrence on or before now. Encoding: 0=Sunday, 1=Monday, ..., 6=Saturday.")
+master_start_hour   = input.int(21,   "Master Start Hour",        minval=0,   maxval=23, group="Master Timing", tooltip="Hour-of-day at which every true open (Year, Month, Week, Day) fires, in the 'UTC Offset' timezone. 24h format (0-23).")
+master_start_minute = input.int(15,   "Master Start Minute",      minval=0,   maxval=59, group="Master Timing", tooltip="Minute-of-hour at which every true open fires. Pairs with 'Master Start Hour'. Range 0-59.")
+utc_offset_hours    = input.int(0,    "UTC Offset (hours)",       minval=-12, maxval=14, group="Master Timing", tooltip="Whole-hour offset from UTC used to interpret every 'Master Start *' input above. Should match the chart's display timezone so e.g. 'Monday 21:15' in the inputs lands on Monday 21:15 on screen. Examples: 0=UTC/GMT, +1=BST, +3=Moscow/EEST, -4=NY EDT, -5=NY EST.")
+
+// === TIMEFRAME VISIBILITY ===
+// A layer renders only when the chart's current resolution is in its list. Same convention as quarterly_cycles.
+year_timeframes  = input.string("H4,H1",     "Year Timeframes",  group="Timeframe Visibility", tooltip="Comma-separated: M1,M5,M15,M30,M45,H1,H4,1D,1W,1M")
+month_timeframes = input.string("H4,H1",     "Month Timeframes", group="Timeframe Visibility")
+week_timeframes  = input.string("H4,H1,M15", "Week Timeframes",  group="Timeframe Visibility")
+day_timeframes   = input.string("M15,M5,M1", "Day Timeframes",   group="Timeframe Visibility")
+
+// === YEAR LAYER ===
+year_length_min = input.int(43200, "Length (minutes)", minval=1,            group="Year",  tooltip="Year line length in minutes from the event timestamp. Default 43200 = 30 days.")
+year_lookback   = input.int(5,     "Years Back",       minval=1, maxval=20, group="Year")
+year_color      = input.color(color.fuchsia, "Color",                       group="Year")
+year_width      = input.int(2,     "Width",            minval=1, maxval=5,  group="Year")
+year_style      = input.string("Solid", "Style", options=["Solid","Dashed","Dotted"], group="Year")
+
+// === MONTH LAYER ===
+month_length_min = input.int(4320, "Length (minutes)", minval=1,            group="Month", tooltip="Default 4320 = 3 days.")
+month_lookback   = input.int(12,   "Months Back",      minval=1, maxval=60, group="Month")
+month_color      = input.color(color.maroon, "Color",                       group="Month")
+month_width      = input.int(1,    "Width",            minval=1, maxval=5,  group="Month")
+month_style      = input.string("Solid", "Style", options=["Solid","Dashed","Dotted"], group="Month")
+
+// === WEEK LAYER ===
+week_length_min = input.int(120, "Length (minutes)", minval=1,             group="Week",  tooltip="Default 120 = 2 hours.")
+week_lookback   = input.int(20,  "Weeks Back",       minval=1, maxval=200, group="Week")
+week_color      = input.color(color.yellow, "Color",                       group="Week")
+week_width      = input.int(2,   "Width",            minval=1, maxval=5,   group="Week")
+week_style      = input.string("Dashed", "Style", options=["Solid","Dashed","Dotted"], group="Week")
+
+// === DAY LAYER ===
+day_length_min = input.int(120, "Length (minutes)", minval=1,             group="Day",   tooltip="Default 120 = 2 hours.")
+day_lookback   = input.int(20,  "Days Back",        minval=1, maxval=200, group="Day")
+day_color      = input.color(color.aqua, "Color",                          group="Day")
+day_width      = input.int(2,   "Width",            minval=1, maxval=5,   group="Day")
+day_style      = input.string("Solid", "Style", options=["Solid","Dashed","Dotted"], group="Day")
+
+// === CONSTANTS ===
+MS_MIN = 60 * 1000
+MS_DAY = 24 * 60 * MS_MIN
+
+// === STATE ===
+var int[]   yearStarts   = array.new<int>()
+var float[] yearPrices   = array.new<float>()
+var int     lastYearKey  = 0
+
+var int[]   monthStarts  = array.new<int>()
+var float[] monthPrices  = array.new<float>()
+var int     lastMonthKey = 0
+
+var int[]   weekStarts   = array.new<int>()
+var float[] weekPrices   = array.new<float>()
+var int     lastWeekKey  = 0
+
+var int[]   dayStarts    = array.new<int>()
+var float[] dayPrices    = array.new<float>()
+var int     lastDayKey   = 0
+
+var line[]  drawnLines   = array.new<line>()
+var label[] drawnLabels  = array.new<label>()
+
+// === HELPERS ===
+tzString() =>
+    utc_offset_hours >= 0 ? "UTC+" + str.tostring(utc_offset_hours) : "UTC" + str.tostring(utc_offset_hours)
+
+stripSpaces(str) =>
+    result = ""
+    for i = 0 to str.length(str) - 1
+        ch = str.substring(str, i, i + 1)
+        if ch != " "
+            result := result + ch
+    result
+
+getCurrentTimeframeString() =>
+    tf = timeframe.period
+    if tf == "D"
+        "1D"
+    else if tf == "W"
+        "1W"
+    else if tf == "M"
+        "1M"
+    else
+        n = str.tonumber(tf)
+        na(n) ? tf : n >= 60 ? "H" + str.tostring(math.floor(n / 60)) : "M" + str.tostring(math.floor(n))
+
+isTimeframeVisible(list) =>
+    str.contains(stripSpaces(list), getCurrentTimeframeString())
+
+styleVal(s) =>
+    switch s
+        "Dashed" => line.style_dashed
+        "Dotted" => line.style_dotted
+        => line.style_solid
+
+daysInMonth(y, m) =>
+    int leapDay = ((y % 4 == 0 and y % 100 != 0) or y % 400 == 0) ? 29 : 28
+    switch m
+        1  => 31
+        3  => 31
+        5  => 31
+        7  => 31
+        8  => 31
+        10 => 31
+        12 => 31
+        4  => 30
+        6  => 30
+        9  => 30
+        11 => 30
+        2  => leapDay
+        => 30
+
+// 1st occurrence of master_start_dow in (y, m) at master time-of-day. Returns na if it would fall outside the month.
+firstMasterDowOfMonth(y, m) =>
+    first    = timestamp(tzString(), y, m, 1, master_start_hour, master_start_minute, 0)
+    firstDow = dayofweek(first, tzString()) - 1
+    addDays  = (master_start_dow - firstDow + 7) % 7
+    nthDay   = 1 + addDays
+    nthDay > daysInMonth(y, m) ? na : timestamp(tzString(), y, m, nthDay, master_start_hour, master_start_minute, 0)
+
+// Most recent master_start_dow at master time-of-day on or before currentTime.
+mostRecentMasterDow(currentTime) =>
+    currentDow = dayofweek(currentTime, tzString()) - 1
+    daysBack   = (currentDow - master_start_dow + 7) % 7
+    if daysBack == 0
+        h  = hour(currentTime, tzString())
+        mi = minute(currentTime, tzString())
+        if h < master_start_hour or (h == master_start_hour and mi < master_start_minute)
+            daysBack := 7
+    rough = currentTime - daysBack * MS_DAY
+    timestamp(tzString(), year(rough, tzString()), month(rough, tzString()), dayofmonth(rough, tzString()), master_start_hour, master_start_minute, 0)
+
+// Draw all events from a layer's state arrays.
+drawLayer(int[] starts, float[] prices, lookback, lengthMin, clr, lw, st, prefix, visible) =>
+    n = array.size(starts)
+    if visible and n > 0
+        startIdx = math.max(0, n - lookback)
+        len_ms   = lengthMin * MS_MIN
+        sty      = styleVal(st)
+        for i = startIdx to n - 1
+            s = array.get(starts, i)
+            p = array.get(prices, i)
+            e = s + len_ms
+            ln = line.new(s, p, e, p, xloc=xloc.bar_time, color=clr, width=lw, style=sty)
+            array.push(drawnLines, ln)
+            if show_labels
+                lb = label.new(s, p, prefix, xloc=xloc.bar_time, style=label.style_label_left, color=color.new(clr, 80), textcolor=color.white, size=size.small)
+                array.push(drawnLabels, lb)
+
+// === PER-BAR EVENT DETECTION ===
+// Always run regardless of timeframe visibility, so switching TFs doesn't lose captured prices.
+y_now      = year(time, tzString())
+m_now      = month(time, tzString())
+d_now      = dayofmonth(time, tzString())
+bar_dur_ms = timeframe.in_seconds(timeframe.period) * 1000
+bar_end    = time + bar_dur_ms
+
+// Year true open: 1st master_start_dow of master_start_month at master time, each year.
+year_event = firstMasterDowOfMonth(y_now, master_start_month)
+if not na(year_event) and y_now != lastYearKey and year_event >= time and year_event < bar_end
+    array.push(yearStarts, year_event)
+    array.push(yearPrices, open)
+    lastYearKey := y_now
+
+// Month true open: 1st master_start_dow of every month at master time.
+month_event = firstMasterDowOfMonth(y_now, m_now)
+monthKey    = y_now * 100 + m_now
+if not na(month_event) and monthKey != lastMonthKey and month_event >= time and month_event < bar_end
+    array.push(monthStarts, month_event)
+    array.push(monthPrices, open)
+    lastMonthKey := monthKey
+
+// Week true open: most-recent master_start_dow at master time.
+int week_event = math.round(mostRecentMasterDow(time))
+if week_event != lastWeekKey and week_event >= time and week_event < bar_end
+    array.push(weekStarts, week_event)
+    array.push(weekPrices, open)
+    lastWeekKey := week_event
+
+// Day true open: today at master time.
+int day_event = timestamp(tzString(), y_now, m_now, d_now, master_start_hour, master_start_minute, 0)
+dayKey        = y_now * 10000 + m_now * 100 + d_now
+if dayKey != lastDayKey and day_event >= time and day_event < bar_end
+    array.push(dayStarts, day_event)
+    array.push(dayPrices, open)
+    lastDayKey := dayKey
+
+// === DRAW ON LAST BAR ===
+if barstate.islast
+    while array.size(drawnLines) > 0
+        l = array.shift(drawnLines)
+        if not na(l)
+            line.delete(l)
+    while array.size(drawnLabels) > 0
+        lb = array.shift(drawnLabels)
+        if not na(lb)
+            label.delete(lb)
+
+    drawLayer(yearStarts,  yearPrices,  year_lookback,  year_length_min,  year_color,  year_width,  year_style,  "Y", isTimeframeVisible(year_timeframes))
+    drawLayer(monthStarts, monthPrices, month_lookback, month_length_min, month_color, month_width, month_style, "M", isTimeframeVisible(month_timeframes))
+    drawLayer(weekStarts,  weekPrices,  week_lookback,  week_length_min,  week_color,  week_width,  week_style,  "W", isTimeframeVisible(week_timeframes))
+    drawLayer(dayStarts,   dayPrices,   day_lookback,   day_length_min,   day_color,   day_width,   day_style,   "D", isTimeframeVisible(day_timeframes))

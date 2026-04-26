@@ -1,24 +1,31 @@
 //@version=6
-indicator("Theorems Sessions Bottom Pane V2 - All Timeframes", "Sessions", overlay=false, max_boxes_count=500, max_labels_count=500)
+indicator("Theorems Quarterly Cycles Bottom Pane V2 - All Timeframes", "Quarterly Cycles", overlay=false, max_boxes_count=500, max_labels_count=500)
 
 // === CONFIGURATION ===
-show_labels = input.bool(true, "Show Session Labels", group="Display")
+show_labels = input.bool(true, "Show Quarter Labels", group="Display")
 label_size = input.string("small", "Label Size", options=["tiny", "small", "normal"], group="Display")
 
 // Master timing — every cycle anchors to this single point.
 // Changing any of these shifts Q1 of every cycle so it begins at the master time.
-master_start_dow    = input.int(1,  "Master Start Day of Week", minval=0, maxval=6, group="Master Timing", tooltip="0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday")
-master_start_hour   = input.int(21, "Master Start Hour",        minval=0, maxval=23, group="Master Timing", tooltip="Hour in 24h format (0-23)")
-master_start_minute = input.int(15, "Master Start Minute",      minval=0, maxval=59, group="Master Timing")
-session_timezone    = input.string("Europe/London", "Session Timezone", group="Master Timing", tooltip="IANA timezone (e.g. 'Europe/London', 'America/New_York', 'Asia/Tokyo', 'UTC') that the master start DOW/hour/minute are interpreted in. Should match the chart's display timezone so Monday 21:15 in the input lands on Monday 21:15 on screen.")
+master_start_year   = input.int(2024, "Master Start Year",        minval=1970,           group="Master Timing", tooltip="Anchor year for the 4-Year Cycle. The 4-year fractal pins to the 1st Tuesday of 'Master Start Month' in this year; every earlier and later 4-year cycle steps from that point.")
+master_start_month  = input.int(4,    "Master Start Month",       minval=1,   maxval=12, group="Master Timing", tooltip="Anchor month for the Year and 4-Year cycles. Each year's Q1 begins on the 1st Tuesday of this month at 'Master Start Hour':'Master Start Minute'. Encoding: 1=Jan, 2=Feb, ..., 12=Dec.")
+master_start_dow    = input.int(1,    "Master Start Day of Week", minval=0,   maxval=6,  group="Master Timing", tooltip="Anchor day-of-week for the Week and Month cycles. Each week's Q1 begins on this day at master time; each month's Q1 begins on the 1st occurrence of this day in the month. Encoding: 0=Sunday, 1=Monday, ..., 6=Saturday.")
+master_start_hour   = input.int(21,   "Master Start Hour",        minval=0,   maxval=23, group="Master Timing", tooltip="Anchor hour-of-day for every cycle. Q1 of each cycle (4-Year, Year, Month, Week, Day, 6H, 90M) begins at this hour:minute in the 'UTC Offset' timezone. 24h format (0-23).")
+master_start_minute = input.int(15,   "Master Start Minute",      minval=0,   maxval=59, group="Master Timing", tooltip="Anchor minute-of-hour for every cycle. Pairs with 'Master Start Hour' to define the time-of-day at which Q1 of each cycle begins. Range 0-59.")
+utc_offset_hours    = input.int(0,    "UTC Offset (hours)",       minval=-12, maxval=14, group="Master Timing", tooltip="Whole-hour offset from UTC used to interpret every 'Master Start *' input above. Should match the chart's display timezone so e.g. 'Monday 21:15' in the inputs lands on Monday 21:15 on screen. Examples: 0=UTC/GMT, +1=BST, +3=Moscow/EEST, -4=NY EDT, -5=NY EST.")
+
+// Historical backfill (default off — Pine Script allows max 500 boxes/labels total).
+backfill_history   = input.bool(false, "Backfill Historical Quarters", group="Display", tooltip="Draw past cycles back through chart history. Capped by 'Max Historical Cycles' per layer and by the Pine 500-box limit — older cycles get trimmed once live cycles push the total over 500.")
+max_history_cycles = input.int(20,    "Max Historical Cycles (per layer)", minval=1, maxval=100, group="Display")
 
 // Timeframe visibility (comma-separated list)
-year_timeframes  = input.string("H4,H1",     "Year Session Timeframes",   group="Timeframe Visibility", tooltip="Comma-separated: M1,M5,M15,M30,M45,H1,H4,1D,1W,1M")
-month_timeframes = input.string("H4,H1",     "Month Session Timeframes",  group="Timeframe Visibility")
-week_timeframes  = input.string("H4,H1,M15", "Week Session Timeframes",   group="Timeframe Visibility")
-day_timeframes   = input.string("M15,M5,M1", "Day Session Timeframes",    group="Timeframe Visibility")
-hour6_timeframes = input.string("M5,M1",     "6-Hour Session Timeframes", group="Timeframe Visibility")
-min90_timeframes = input.string("M1",        "90-Min Session Timeframes", group="Timeframe Visibility")
+year4_timeframes = input.string("H4,H1,1D,1W", "4-Year Quarter Timeframes", group="Timeframe Visibility", tooltip="Comma-separated: M1,M5,M15,M30,M45,H1,H4,1D,1W,1M")
+year_timeframes  = input.string("H4,H1",       "Year Quarter Timeframes",   group="Timeframe Visibility")
+month_timeframes = input.string("H4,H1",       "Month Quarter Timeframes",  group="Timeframe Visibility")
+week_timeframes  = input.string("H4,H1,M15",   "Week Quarter Timeframes",   group="Timeframe Visibility")
+day_timeframes   = input.string("M15,M5,M1",   "Day Quarter Timeframes",    group="Timeframe Visibility")
+hour6_timeframes = input.string("M5,M1",       "6-Hour Quarter Timeframes", group="Timeframe Visibility")
+min90_timeframes = input.string("M1",          "90-Min Quarter Timeframes", group="Timeframe Visibility")
 
 // Universal Quarter Colors
 q1_color = input.color(color.new(color.gray,  80), "Quarter 1 Color", group="Colors")
@@ -32,18 +39,20 @@ MS_HOUR = 60 * MS_MIN
 MS_DAY  = 24 * MS_HOUR
 
 // Session type indices
-YEAR_SESSION  = 0
-MONTH_SESSION = 1
-WEEK_SESSION  = 2
-DAY_SESSION   = 3
-HOUR6_SESSION = 4
-MIN90_SESSION = 5
+YEAR4_SESSION = 0
+YEAR_SESSION  = 1
+MONTH_SESSION = 2
+WEEK_SESSION  = 3
+DAY_SESSION   = 4
+HOUR6_SESSION = 5
+MIN90_SESSION = 6
 
 // Quarter durations (ms). Each cycle = 4 * quarter.
-// ICT fractal: year/4 ≈ 91.3125d, month/4 = 7d, week/4 = 24h (Mon-Thu), day/4 = 6h, 6h/4 = 90m, 90m/4 = 22.5m.
+// ICT fractal: 4y/4 ≈ 365.25d, year/4 ≈ 91.3125d, month/4 = 7d, week/4 = 30h (5 day-quarters), day/4 = 6h, 6h/4 = 90m, 90m/4 = 22.5m.
+QD_YEAR4 = 365.25  * MS_DAY
 QD_YEAR  = 91.3125 * MS_DAY
 QD_MONTH = 7.0     * MS_DAY
-QD_WEEK  = 24.0    * MS_HOUR
+QD_WEEK  = 30.0    * MS_HOUR
 QD_DAY   = 6.0     * MS_HOUR
 QD_6H    = 90.0    * MS_MIN
 QD_90M   = 22.5    * MS_MIN
@@ -52,11 +61,19 @@ QD_90M   = 22.5    * MS_MIN
 // Start timestamp (ms) of the last cycle we rendered, per session type. 0 == "not yet drawn".
 // We re-render a cycle's 4 quarters only when its start advances, which guarantees Q4 is drawn
 // even when no bar falls inside its time range (e.g. FX weekend for the week cycle).
-var int[]   lastCycleStart = array.new<int>(6, 0)
+var int[]   lastCycleStart = array.new<int>(7, 0)
 var box[]   allBoxes       = array.new<box>()
 var label[] allLabels      = array.new<label>()
+var int     firstBarTime   = na
+var bool    backfillDone   = false
+if na(firstBarTime)
+    firstBarTime := time
 
 // === HELPERS ===
+// Pine accepts "UTC+N" / "UTC-N" as a timezone string — str.tostring preserves the sign for negatives.
+tzString() =>
+    utc_offset_hours >= 0 ? "UTC+" + str.tostring(utc_offset_hours) : "UTC" + str.tostring(utc_offset_hours)
+
 stripSpaces(str) =>
     result = ""
     for i = 0 to str.length(str) - 1
@@ -93,46 +110,56 @@ labelSizeVal() =>
 
 // === MASTER-ANCHORED SESSION STARTS ===
 
-// Year: Jan 1 of the year containing currentTime, at master time-of-day.
-// If before that instant, fall back to Jan 1 of previous year.
-yearStartFor(currentTime) =>
-    y     = year(currentTime, session_timezone)
-    start = timestamp(session_timezone, y, 1, 1, master_start_hour, master_start_minute, 0)
-    currentTime < start ? timestamp(session_timezone, y - 1, 1, 1, master_start_hour, master_start_minute, 0) : start
-
-// First occurrence of master DOW in (y, m) at master time-of-day.
-firstMasterDowOfMonth(y, m) =>
-    first    = timestamp(session_timezone, y, m, 1, master_start_hour, master_start_minute, 0)
-    firstDow = dayofweek(first, session_timezone) - 1
-    addDays  = (master_start_dow - firstDow + 7) % 7
+// First occurrence of `dow` in (y, m) at master time-of-day.
+// dow convention: 0=Sun, 1=Mon, ..., 6=Sat (matches master_start_dow).
+firstDowOfMonthAt(y, m, dow) =>
+    first    = timestamp(tzString(), y, m, 1, master_start_hour, master_start_minute, 0)
+    firstDow = dayofweek(first, tzString()) - 1
+    addDays  = (dow - firstDow + 7) % 7
     first + addDays * MS_DAY
 
+// Year: anchored to the 1st Tuesday in `master_start_month` of the year containing currentTime, at master time-of-day.
+// If before that instant, fall back to the 1st Tuesday in `master_start_month` of the previous year.
+// Tuesday = 2 under the 0=Sun convention.
+yearStartFor(currentTime) =>
+    y     = year(currentTime, tzString())
+    start = firstDowOfMonthAt(y, master_start_month, 2)
+    currentTime < start ? firstDowOfMonthAt(y - 1, master_start_month, 2) : start
+
+// 4-year cycle: anchored to the 1st Tuesday in `master_start_month` of `master_start_year`. Each quarter = QD_YEAR4 (365.25d).
+// Uses 365.25d stride so leap years average out — acceptable drift for a 4-year fractal.
+year4StartFor(currentTime) =>
+    anchorMs = firstDowOfMonthAt(master_start_year, master_start_month, 2)
+    cycleLen = QD_YEAR4 * 4
+    elapsed  = currentTime - anchorMs
+    anchorMs + math.floor(elapsed / cycleLen) * cycleLen
+
 monthStartFor(currentTime) =>
-    y         = year(currentTime, session_timezone)
-    m         = month(currentTime, session_timezone)
-    thisStart = firstMasterDowOfMonth(y, m)
+    y         = year(currentTime, tzString())
+    m         = month(currentTime, tzString())
+    thisStart = firstDowOfMonthAt(y, m, master_start_dow)
     if currentTime < thisStart
         prevY = m == 1 ? y - 1 : y
         prevM = m == 1 ? 12    : m - 1
-        firstMasterDowOfMonth(prevY, prevM)
+        firstDowOfMonthAt(prevY, prevM, master_start_dow)
     else
         thisStart
 
 // Most recent master DOW at master time-of-day on or before currentTime.
 weekStartFor(currentTime) =>
-    currentDow = dayofweek(currentTime, session_timezone) - 1
+    currentDow = dayofweek(currentTime, tzString()) - 1
     daysBack   = (currentDow - master_start_dow + 7) % 7
     if daysBack == 0
-        h  = hour(currentTime, session_timezone)
-        mi = minute(currentTime, session_timezone)
+        h  = hour(currentTime, tzString())
+        mi = minute(currentTime, tzString())
         if h < master_start_hour or (h == master_start_hour and mi < master_start_minute)
             daysBack := 7
     rough = currentTime - daysBack * MS_DAY
-    timestamp(session_timezone, year(rough, session_timezone), month(rough, session_timezone), dayofmonth(rough, session_timezone), master_start_hour, master_start_minute, 0)
+    timestamp(tzString(), year(rough, tzString()), month(rough, tzString()), dayofmonth(rough, tzString()), master_start_hour, master_start_minute, 0)
 
 // Today at master time, or yesterday if we're before today's master time.
 dayStartFor(currentTime) =>
-    todayMaster = timestamp(session_timezone, year(currentTime, session_timezone), month(currentTime, session_timezone), dayofmonth(currentTime, session_timezone), master_start_hour, master_start_minute, 0)
+    todayMaster = timestamp(tzString(), year(currentTime, tzString()), month(currentTime, tzString()), dayofmonth(currentTime, tzString()), master_start_hour, master_start_minute, 0)
     currentTime < todayMaster ? todayMaster - MS_DAY : todayMaster
 
 // Nested cycle start: step forward from the day anchor by cycleLen until we contain currentTime.
@@ -143,6 +170,7 @@ nestedStartFor(currentTime, cycleLen) =>
 
 sessionStartFor(type, currentTime) =>
     switch type
+        YEAR4_SESSION => year4StartFor(currentTime)
         YEAR_SESSION  => yearStartFor(currentTime)
         MONTH_SESSION => monthStartFor(currentTime)
         WEEK_SESSION  => weekStartFor(currentTime)
@@ -153,6 +181,7 @@ sessionStartFor(type, currentTime) =>
 
 quarterDurationFor(type) =>
     switch type
+        YEAR4_SESSION => QD_YEAR4
         YEAR_SESSION  => QD_YEAR
         MONTH_SESSION => QD_MONTH
         WEEK_SESSION  => QD_WEEK
@@ -165,6 +194,7 @@ quarterDurationFor(type) =>
 layer_height = 30
 base_y       = 10
 
+year4_visible = isTimeframeVisible(year4_timeframes)
 year_visible  = isTimeframeVisible(year_timeframes)
 month_visible = isTimeframeVisible(month_timeframes)
 week_visible  = isTimeframeVisible(week_timeframes)
@@ -174,6 +204,8 @@ min90_visible = isTimeframeVisible(min90_timeframes)
 
 current_y = base_y
 
+year4_y   = year4_visible ? current_y : na
+current_y := year4_visible ? current_y + layer_height : current_y
 year_y    = year_visible  ? current_y : na
 current_y := year_visible  ? current_y + layer_height : current_y
 month_y   = month_visible ? current_y : na
@@ -237,7 +269,26 @@ processSession(type, layerY, enabled, labelPrefix) =>
                 drawQuarterAt(q, layerY, labelPrefix, start, qDur)
             array.set(lastCycleStart, type, startMs)
 
+// === HISTORICAL BACKFILL ===
+// Walks backward from the current cycle start by re-invoking sessionStartFor at (prev - 1ms),
+// which correctly handles variable strides (year anchor shifts, trading-week gaps, etc.).
+// Stops at max_history_cycles, chart history start, or a 450-box budget (leaves 50 for live cycles).
+backfillSession(type, layerY, enabled, labelPrefix) =>
+    if enabled and not na(firstBarTime)
+        qDur   = quarterDurationFor(type)
+        cursor = sessionStartFor(type, time)
+        for i = 1 to max_history_cycles
+            if array.size(allBoxes) >= 450
+                break
+            cursor := sessionStartFor(type, cursor - 1)
+            if cursor < firstBarTime
+                break
+            for q = 0 to 3
+                drawQuarterAt(q, layerY, labelPrefix, cursor, qDur)
+
 // === MAIN ===
+if year4_visible
+    processSession(YEAR4_SESSION, year4_y, true, "4Y-Q")
 if year_visible
     processSession(YEAR_SESSION,  year_y,  true, "Y-Q")
 if month_visible
@@ -250,6 +301,16 @@ if hour6_visible
     processSession(HOUR6_SESSION, hour6_y, true, "6H-Q")
 if min90_visible
     processSession(MIN90_SESSION, min90_y, true, "90M-Q")
+
+if backfill_history and barstate.islast and not backfillDone
+    backfillSession(YEAR4_SESSION, year4_y, year4_visible, "4Y-Q")
+    backfillSession(YEAR_SESSION,  year_y,  year_visible,  "Y-Q")
+    backfillSession(MONTH_SESSION, month_y, month_visible, "M-Q")
+    backfillSession(WEEK_SESSION,  week_y,  week_visible,  "W-Q")
+    backfillSession(DAY_SESSION,   day_y,   day_visible,   "D-Q")
+    backfillSession(HOUR6_SESSION, hour6_y, hour6_visible, "6H-Q")
+    backfillSession(MIN90_SESSION, min90_y, min90_visible, "90M-Q")
+    backfillDone := true
 
 // === CLEANUP ===
 while array.size(allBoxes) > 500

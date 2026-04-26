@@ -6,14 +6,14 @@ This directory contains Pine Script indicators for TradingView, specifically foc
 ## Key Files
 
 ### `theorems_sessions_bottom_pane.pine`
-**Status**: Recently debugged and fixed (April 2026)
-**Purpose**: Multi-layer session timeline indicator that displays various time cycles
+**Status**: Recently debugged and fixed (April 2026). Indicator display name: "Quarterly Cycles".
+**Purpose**: Multi-layer quarter timeline indicator that displays various ICT-style time cycles. (Named "Quarterly Cycles" to avoid clash with Asia/LDN/NY trading "sessions".)
 **Layers (bottom to top)**:
-1. 4-Year Cycle (4 phases)
-2. Year Cycle (4 quarters)
-3. Month Cycle (4 weeks)
-4. Week Cycle (4 phases: Mon-Tue, Wed-Thu, Fri, Sat-Sun)
-5. Day Cycle (4 fixed sessions: 00:00-06:00, 06:00-12:00, 12:00-18:00, 18:00-00:00)
+1. 4-Year Cycle (4 quarters of 365.25d — anchored to 1st Tuesday of `Master Start Month` in `Master Start Year`; defaults: April / 2024)
+2. Year Cycle (4 quarters of ~91.3d — anchored to 1st Tuesday of `Master Start Month` each year; default April)
+3. Month Cycle (4 weeks — anchored to 1st master-DOW of each month)
+4. Week Cycle (4 quarters of 30h = 5 day-quarters; week Q1 ends on a day-Q1 boundary)
+5. Day Cycle (4 quarters of 6h: 00:00-06:00, 06:00-12:00, 12:00-18:00, 18:00-00:00 in the master timezone)
 6. 90-Minute Cycle (16 segments per day, alternating colors)
 7. 22.5-Minute Cycle (4 quarters per 90M segment)
 
@@ -23,7 +23,13 @@ This directory contains Pine Script indicators for TradingView, specifically foc
 - ✅ Added null checks for historical data access
 - ✅ Improved array management and cleanup
 - ✅ Enhanced bar indexing logic to prevent errors
-- ✅ Added `session_timezone` input (default `Europe/London`) threaded through every `timestamp()`/`year()`/`month()`/`dayofmonth()`/`hour()`/`minute()`/`dayofweek()` call so master DOW/hour/minute are interpreted in the user's chart timezone instead of `syminfo.timezone`
+- ✅ Replaced IANA `session_timezone` input with a numeric `UTC Offset (hours)` input (-12..+14) formatted into Pine's native `UTC±N` timezone string
+- ✅ Week quarter duration changed from 24h to **30h** (5 day-quarters)
+- ✅ Year cycle re-anchored from Jan 1 to the **1st Tuesday in `Master Start Month`** (default April) each year (via generalised `firstDowOfMonthAt(y, m, dow)` helper — reused by the month cycle for master-DOW anchoring)
+- ✅ Added `Master Start Month` (default 4) and `Master Start Year` (default 2024) inputs alongside `Master Start Day of Week`/`Hour`/`Minute` for consistent naming
+- ✅ Added **4-Year Cycle** layer as the bottommost layer, anchored to the 1st Tuesday of `Master Start Month` in `Master Start Year`
+- ✅ Renamed indicator display name from "Sessions" to "Quarterly Cycles" (plus user-facing input labels "Session" → "Quarter")
+- ✅ Added optional historical backfill (`Backfill Historical Quarters` toggle + `Max Historical Cycles` cap), default-off, bounded by Pine's 500-box limit (hard cap at 450 to leave headroom for live cycles)
 
 ## Testing Infrastructure
 
@@ -159,6 +165,6 @@ bash trading-view-indicators/tests/run_tests.sh
 
 ---
 
-**Last Updated**: April 6, 2026
+**Last Updated**: April 22, 2026
 **Status**: Production Ready ✅
 **Test Coverage**: Complete ✅
